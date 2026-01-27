@@ -99,6 +99,9 @@ async function startCamera() {
         const video = document.getElementById('video');
         video.srcObject = videoStream;
 
+        // Add immersive class
+        document.body.classList.add('scanning-mode');
+
         // Start scanning after video is ready
         video.addEventListener('loadedmetadata', () => {
             startScanning();
@@ -115,6 +118,7 @@ function stopCamera() {
         videoStream.getTracks().forEach(track => track.stop());
         videoStream = null;
     }
+    document.body.classList.remove('scanning-mode');
 
     if (scanningInterval) {
         clearInterval(scanningInterval);
@@ -174,6 +178,9 @@ function showResult(success, data) {
     const resultIcon = document.getElementById('resultIcon');
     const resultTitle = document.getElementById('resultTitle');
     const resultValue = document.getElementById('resultValue');
+
+    // Remove immersive class to show result UI
+    document.body.classList.remove('scanning-mode');
 
     // Update result content
     if (success) {

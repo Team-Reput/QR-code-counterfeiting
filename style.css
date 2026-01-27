@@ -328,15 +328,24 @@ body {
 /* ===== Scan Section ===== */
 .camera-container {
     position: relative;
-    border-radius: var(--radius-xl);
+    max-width: 300px;
+    aspect-ratio: 1 / 1;
+    margin: 0 auto var(--spacing-md);
+    border-radius: var(--radius-lg);
     overflow: hidden;
     background: var(--gray-900);
-    margin-bottom: var(--spacing-md);
+    border: 3px solid var(--accent-cyan);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
 }
 
 #video {
+    position: absolute;
+    top: 0;
+    left: 0;
     width: 100%;
+    height: 100%;
     display: block;
+    object-fit: cover;
 }
 
 .scan-overlay {
@@ -351,11 +360,8 @@ body {
 }
 
 .scan-frame {
-    width: 250px;
-    height: 250px;
-    border: 3px solid var(--accent-cyan);
-    border-radius: var(--radius-lg);
-    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+    width: 100%;
+    height: 100%;
     position: relative;
 }
 
@@ -366,6 +372,7 @@ body {
     width: 20px;
     height: 20px;
     border: 3px solid var(--accent-cyan-light);
+    z-index: 10;
 }
 
 .scan-frame::before {
@@ -384,11 +391,12 @@ body {
 
 .scan-line {
     position: absolute;
-    width: 250px;
+    width: 100%;
     height: 2px;
     background: var(--accent-cyan-light);
     box-shadow: 0 0 10px var(--accent-cyan-light);
     animation: scan 2s linear infinite;
+    z-index: 5;
 }
 
 /* ===== Result Section ===== */
@@ -516,6 +524,21 @@ body {
     font-size: 0.9rem;
 }
 
+/* ===== Scanning UI Refinements ===== */
+body.scanning-mode {
+    overflow: auto;
+}
+
+body.scanning-mode .camera-container {
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+body.scanning-mode #video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
 /* ===== Utility Classes ===== */
 .hidden {
     display: none !important;
@@ -536,11 +559,11 @@ body {
 
 @keyframes scan {
     0% {
-        transform: translateY(-125px);
+        top: 0;
     }
 
     100% {
-        transform: translateY(125px);
+        top: 100%;
     }
 }
 
@@ -644,6 +667,10 @@ body {
         font-size: 0.85rem;
     }
 
+    .camera-container {
+        max-width: 300px;
+    }
+
     .scan-frame {
         width: 200px;
         height: 200px;
@@ -687,6 +714,10 @@ body {
     .scan-upload-btn {
         font-size: 1rem;
         padding: var(--spacing-md);
+    }
+
+    .camera-container {
+        max-width: 220px;
     }
 
     .scan-frame {
