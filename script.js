@@ -1,5 +1,5 @@
 // ===== Global Variables =====
-let currentMode = 'upload';
+let currentMode = 'scan';
 let videoStream = null;
 let scanningInterval = null;
 
@@ -221,6 +221,11 @@ function resetScanner() {
 document.addEventListener('DOMContentLoaded', () => {
     // Add smooth scroll behavior
     document.documentElement.style.scrollBehavior = 'smooth';
+
+    // Automatically start camera in 'scan' mode
+    if (currentMode === 'scan') {
+        startCamera();
+    }
 });
 
 // ===== Cleanup on page unload =====
