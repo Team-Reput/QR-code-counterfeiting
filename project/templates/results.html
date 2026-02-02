@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verification Result - Reput</title>
+    <meta name="description" content="QR Code verification result from Reput's anti-counterfeiting system">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <style>
+        .results-container {
+            max-width: 700px;
+            margin: 0 auto;
+            padding: var(--spacing-lg);
+        }
+
+        /* ===== Status Hero ===== */
+        .result-hero {
+            text-align: center;
+            padding: var(--spacing-xl) 0 var(--spacing-lg);
+            animation: fadeInDown var(--transition-slow) ease-out;
+        }
+
+        .status-icon-ring {
+            width: 100px;
+            height: 100px;
+            margin: 0 auto var(--spacing-md);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: scaleIn var(--transition-base) ease-out;
+        }
+
+        .status-icon-ring.verified {
+            background: linear-gradient(135deg, var(--success) 0%, var(--success-light) 100%);
+            box-shadow: 0 8px 32px rgba(16, 185, 129, 0.35);
+        }
+
+        .status-icon-ring.failed {
+            background: linear-gradient(135deg, var(--error) 0%, var(--error-light) 100%);
+            box-shadow: 0 8px 32px rgba(239, 68, 68, 0.35);
+        }
+
+        .status-icon-ring.suspect {
+            background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
+            box-shadow: 0 8px 32px rgba(245, 158, 11, 0.35);
+        }
+
+        .status-icon-ring svg {
+            width: 48px;
+            height: 48px;
+            stroke: var(--white);
+            stroke-width: 2.5;
+        }
+
+        .status-label {
+            font-size: 1.75rem;
+            font-weight: 800;
+            margin-bottom: var(--spacing-xs);
+        }
+
+        .status-label.verified { color: var(--success); }
+        .status-label.failed   { color: var(--error); }
+        .status-label.suspect  { color: #f59e0b; }
+
+        /* ===== Reason Card ===== */
+        .reason-card {
+            background: var(--white);
+            border-radius: var(--radius-2xl);
+            box-shadow: var(--shadow-lg);
+            padding: var(--spacing-lg);
+            margin-bottom: var(--spacing-lg);
+            border: 1px solid var(--gray-200);
+            animation: fadeInUp var(--transition-slow) ease-out;
+        }
+
+        .reason-card.verified-border { border-left: 5px solid var(--success); }
+        .reason-card.failed-border   { border-left: 5px solid var(--error); }
+        .reason-card.suspect-border  { border-left: 5px solid #f59e0b; }
+
+        .reason-title {
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: var(--gray-500);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            margin-bottom: var(--spacing-xs);
+        }
+
+        .reason-text {
+            font-size: 1rem;
+            color: var(--gray-700);
+            line-height: 1.7;
+        }
+
+        /* ===== Product Card ===== */
+        .product-card {
+            background: var(--white);
+            border-radius: var(--radius-2xl);
+            box-shadow: var(--shadow-lg);
+            padding: var(--spacing-lg);
+            margin-bottom: var(--spacing-lg);
+            border: 1px solid var(--gray-200);
+            animation: fadeInUp var(--transition-slow) ease-out;
+            animation-delay: 0.1s;
+            animation-fill-mode: both;
+        }
+
+        .product-card-header {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-xs);
+            margin-bottom: var(--spacing-md);
+        }
+
+        .product-card-header svg {
+            width: 22px;
+            height: 22px;
+            stroke: var(--primary-blue);
+            flex-shrink: 0;
+        }
+
+        .product-card-header h2 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--gray-800);
+        }
+
+        .product-fields {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+        }
+
+        .product-field {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 0;
+            border-bottom: 1px solid var(--gray-100);
+        }
+
+        .product-field:last-child {
+            border-bottom: none;
+        }
+
+        .field-label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--gray-500);
+        }
+
+        .field-value {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--gray-800);
+            text-align: right;
+            max-width: 60%;
+            word-break: break-word;
+        }
+
+        .field-value.blurred {
+            filter: blur(6px);
+            user-select: none;
+            pointer-events: none;
+        }
+
+        /* ===== Scan Activity Card ===== */
+        .scan-activity-card {
+            background: var(--white);
+            border-radius: var(--radius-2xl);
+            box-shadow: var(--shadow-lg);
+            padding: var(--spacing-lg);
+            margin-bottom: var(--spacing-lg);
+            border: 1px solid var(--gray-200);
+            animation: fadeInUp var(--transition-slow) ease-out;
+            animation-delay: 0.15s;
+            animation-fill-mode: both;
+        }
+
+        .scan-activity-header {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-xs);
+            margin-bottom: var(--spacing-md);
+        }
+
+        .scan-activity-header svg {
+            width: 22px;
+            height: 22px;
+            stroke: var(--primary-blue);
+            flex-shrink: 0;
+        }
+
+        .scan-activity-header h2 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--gray-800);
+        }
+
+        .scan-log-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        .scan-log-table th {
+            text-align: left;
+            padding: 10px 8px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: var(--gray-500);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid var(--gray-200);
+        }
+
+        .scan-log-table td {
+            padding: 10px 8px;
+            color: var(--gray-700);
+            border-bottom: 1px solid var(--gray-100);
+            vertical-align: top;
+        }
+
+        .scan-log-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .device-text {
+            max-width: 180px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: block;
+        }
+
+        .no-scans {
+            text-align: center;
+            padding: var(--spacing-md);
+            color: var(--gray-400);
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 480px) {
+            .scan-log-table {
+                font-size: 0.78rem;
+            }
+
+            .scan-log-table th,
+            .scan-log-table td {
+                padding: 8px 4px;
+            }
+
+            .device-text {
+                max-width: 100px;
+            }
+        }
+
+        /* ===== Claim Ownership Card ===== */
+        .claim-ownership-card {
+            background: var(--white);
+            border-radius: var(--radius-2xl);
+            box-shadow: var(--shadow-lg);
+            padding: var(--spacing-lg);
+            margin-bottom: var(--spacing-lg);
+            border: 1px solid var(--gray-200);
+            animation: fadeInUp var(--transition-slow) ease-out;
+            animation-delay: 0.2s;
+            animation-fill-mode: both;
+        }
+
+        .claim-ownership-header {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-xs);
+            margin-bottom: var(--spacing-sm);
+        }
+
+        .claim-ownership-header svg {
+            width: 22px;
+            height: 22px;
+            stroke: var(--primary-blue);
+            flex-shrink: 0;
+        }
+
+        .claim-ownership-header h2 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--gray-800);
+        }
+
+        .claim-ownership-description {
+            font-size: 0.9rem;
+            color: var(--gray-600);
+            margin-bottom: var(--spacing-md);
+            line-height: 1.6;
+        }
+
+        .claim-ownership-form {
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-md);
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-xs);
+        }
+
+        .form-group label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--gray-700);
+        }
+
+        .form-group input {
+            padding: 12px 16px;
+            border: 2px solid var(--gray-300);
+            border-radius: var(--radius-lg);
+            font-family: var(--font-family);
+            font-size: 0.95rem;
+            transition: all var(--transition-base);
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--primary-blue);
+            box-shadow: 0 0 0 3px rgba(6, 241, 123, 0.1);
+        }
+
+        .btn-claim {
+            padding: 14px 32px;
+            background: var(--gradient-primary);
+            color: var(--white);
+            border: none;
+            border-radius: var(--radius-lg);
+            font-family: var(--font-family);
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition-base);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: var(--spacing-xs);
+        }
+
+        .btn-claim:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-xl), var(--shadow-glow);
+        }
+
+        .btn-claim:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .claim-error {
+            color: var(--error);
+            font-size: 0.85rem;
+            font-weight: 500;
+            margin-top: var(--spacing-xs);
+            text-align: center;
+        }
+
+        /* ===== Ownership Info Card ===== */
+        .ownership-info-card {
+            background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+            border-radius: var(--radius-2xl);
+            box-shadow: var(--shadow-lg);
+            padding: var(--spacing-lg);
+            margin-bottom: var(--spacing-lg);
+            border: 2px solid var(--success-light);
+            animation: fadeInUp var(--transition-slow) ease-out;
+            animation-delay: 0.2s;
+            animation-fill-mode: both;
+        }
+
+        .ownership-info-header {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-xs);
+            margin-bottom: var(--spacing-md);
+        }
+
+        .ownership-info-header svg {
+            width: 22px;
+            height: 22px;
+            stroke: var(--success);
+            flex-shrink: 0;
+        }
+
+        .ownership-info-header h2 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--gray-800);
+        }
+
+        .ownership-details {
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-sm);
+        }
+
+        .ownership-field {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: var(--white);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--success-light);
+        }
+
+        /* ===== Action Buttons ===== */
+        .action-buttons {
+            display: flex;
+            gap: var(--spacing-md);
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: var(--spacing-lg);
+        }
+
+        .btn-home {
+            padding: 14px 32px;
+            background: var(--gradient-primary);
+            color: var(--white);
+            border: none;
+            border-radius: var(--radius-lg);
+            font-family: var(--font-family);
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition-base);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: var(--spacing-xs);
+        }
+
+        .btn-home:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-xl), var(--shadow-glow);
+        }
+
+        .btn-report {
+            padding: 14px 32px;
+            background: transparent;
+            color: var(--error);
+            border: 2px solid var(--error);
+            border-radius: var(--radius-lg);
+            font-family: var(--font-family);
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition-base);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: var(--spacing-xs);
+        }
+
+        .btn-report:hover {
+            background: var(--error);
+            color: var(--white);
+            transform: translateY(-2px);
+        }
+
+        .timestamp {
+            text-align: center;
+            color: var(--gray-400);
+            font-size: 0.8rem;
+            margin-top: var(--spacing-md);
+        }
+
+        @media (max-width: 480px) {
+            .status-icon-ring {
+                width: 80px;
+                height: 80px;
+            }
+
+            .status-icon-ring svg {
+                width: 38px;
+                height: 38px;
+            }
+
+            .status-label {
+                font-size: 1.4rem;
+            }
+
+            .product-field {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 4px;
+            }
+
+            .field-value {
+                text-align: left;
+                max-width: 100%;
+            }
+
+            .action-buttons {
+                flex-direction: column;
+            }
+
+            .btn-home, .btn-report {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container results-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="brand-container">
+                <img src="/static/image.png" alt="Reput Logo" class="logo-image">
+                <div class="brand-text">
+                    <h1 class="brand-name">RePut.ai</h1>
+                    <p class="company-tagline">Your only source of truth</p>
+                </div>
+            </div>
+        </header>
+
+        <!-- Status Hero -->
+        <section class="result-hero">
+            <div id="statusIconRing" class="status-icon-ring verified">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+            </div>
+            <h1 id="statusLabel" class="status-label verified">VERIFIED</h1>
+        </section>
+
+        <!-- Reason Card -->
+        <section id="reasonCard" class="reason-card verified-border">
+            <p class="reason-title">Verification Result</p>
+            <p id="reasonText" class="reason-text"></p>
+        </section>
+
+        <!-- Product Details Card -->
+        <section id="productCard" class="product-card" style="display: none;">
+            <div class="product-card-header">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                </svg>
+                <h2>Product Information</h2>
+            </div>
+            <div id="productFields" class="product-fields">
+                <!-- Filled dynamically -->
+            </div>
+        </section>
+
+        <!-- Claim Ownership Card -->
+        <section id="claimOwnershipCard" class="claim-ownership-card" style="display: none;">
+            <div class="claim-ownership-header">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+                <h2>Claim Ownership</h2>
+            </div>
+            <p class="claim-ownership-description">
+                Enter the OTP provided with the product to claim ownership and unlock full product details.
+            </p>
+            <div class="claim-ownership-form">
+                <div class="form-group">
+                    <label for="otpInput">OTP Code</label>
+                    <input type="text" id="otpInput" placeholder="Enter 6-digit OTP" maxlength="6" />
+                </div>
+                <div class="form-group">
+                    <label for="ownerName">Your Name</label>
+                    <input type="text" id="ownerName" placeholder="Enter your name" />
+                </div>
+                <div class="form-group">
+                    <label for="ownerPhone">Phone Number</label>
+                    <input type="tel" id="ownerPhone" placeholder="Enter your phone number" />
+                </div>
+                <button id="claimOwnershipBtn" class="btn-claim">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
+                    Claim Ownership
+                </button>
+                <p id="claimError" class="claim-error" style="display: none;"></p>
+            </div>
+        </section>
+
+        <!-- Ownership Info Card -->
+        <section id="ownershipInfoCard" class="ownership-info-card" style="display: none;">
+            <div class="ownership-info-header">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                </svg>
+                <h2>Ownership Information</h2>
+            </div>
+            <div class="ownership-details">
+                <div class="ownership-field">
+                    <span class="field-label">Device</span>
+                    <span id="ownershipDevice" class="field-value"></span>
+                </div>
+                <div class="ownership-field">
+                    <span class="field-label">Claimed On</span>
+                    <span id="ownershipClaimedAt" class="field-value"></span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Scan Activity Card -->
+        <section id="scanActivityCard" class="scan-activity-card" style="display: none;">
+            <div class="scan-activity-header">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                <h2>Scan Activity</h2>
+            </div>
+            <div id="scanLogWrapper">
+                <!-- Recent scans table filled dynamically -->
+            </div>
+        </section>
+
+        <!-- Action Buttons -->
+        <div class="action-buttons">
+            <a href="/" class="btn-home">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <line x1="3" y1="12" x2="21" y2="12"></line>
+                </svg>
+                Scan Another QR
+            </a>
+            <button id="reportBtn" class="btn-report" style="display: none;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+                Report Counterfeit
+            </button>
+        </div>
+
+        <p id="timestamp" class="timestamp"></p>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>&copy; 2026 Reput. All rights reserved.</p>
+        </footer>
+    </div>
+
+    <script>
+        let currentToken = '';
+        let currentProductId = '';
+        let currentBatchId = '';
+        let isOwnershipClaimed = false;
+        let isDeviceAuthorized = false;
+
+        // Device fingerprinting
+        async function generateDeviceFingerprint() {
+            const components = [
+                navigator.userAgent,
+                navigator.language,
+                screen.width,
+                screen.height,
+                screen.colorDepth,
+                new Date().getTimezoneOffset(),
+                navigator.hardwareConcurrency || 'unknown',
+                navigator.platform
+            ];
+
+            // Canvas fingerprint
+            try {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                ctx.textBaseline = 'top';
+                ctx.font = '14px Arial';
+                ctx.fillText('fingerprint', 2, 2);
+                components.push(canvas.toDataURL());
+            } catch (e) {
+                components.push('no-canvas');
+            }
+
+            const fingerprint = components.join('|');
+            const msgUint8 = new TextEncoder().encode(fingerprint);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        function getDeviceInfo() {
+            const ua = navigator.userAgent;
+            let make = 'Unknown';
+            let model = 'Unknown';
+
+            // Try to extract device make and model from user agent
+            if (/(iPhone|iPad|iPod)/.test(ua)) {
+                make = 'Apple';
+                const match = ua.match(/(iPhone|iPad|iPod)/);
+                model = match ? match[1] : 'iOS Device';
+            } else if (/Android/.test(ua)) {
+                make = 'Android';
+                const match = ua.match(/Android[^;]+;[^)]*\)\s*([^)]+)/);
+                if (match && match[1]) {
+                    const parts = match[1].trim().split(/\s+/);
+                    if (parts.length > 1) {
+                        make = parts[0];
+                        model = parts.slice(1).join(' ');
+                    }
+                }
+            } else if (/Windows/.test(ua)) {
+                make = 'Microsoft';
+                model = 'Windows PC';
+            } else if (/Macintosh|Mac OS/.test(ua)) {
+                make = 'Apple';
+                model = 'Mac';
+            }
+
+            return { make, model };
+        }
+
+        async function checkOwnershipStatus(token) {
+            const fingerprint = await generateDeviceFingerprint();
+
+            try {
+                const response = await fetch('/api/check_ownership', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        token,
+                        device_fingerprint: fingerprint,
+                        product_id: currentProductId,
+                        batch_id: currentBatchId
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.claimed) {
+                    isOwnershipClaimed = true;
+                    isDeviceAuthorized = data.authorized || false;
+
+                    if (data.authorized) {
+                        // Show ownership info
+                        showOwnershipInfo(data);
+                        // Remove blur from product values
+                        document.querySelectorAll('.field-value').forEach(el => {
+                            el.classList.remove('blurred');
+                        });
+                    } else {
+                        // Device not authorized - hide all details and show claimed message
+                        showUnauthorizedMessage();
+                    }
+                } else {
+                    // Not claimed - show claim ownership form
+                    showClaimOwnershipForm();
+                    applyBlurToProductValues();
+                }
+            } catch (error) {
+                console.error('Failed to check ownership:', error);
+                // Default to showing claim form
+                showClaimOwnershipForm();
+                applyBlurToProductValues();
+            }
+        }
+
+        function showOwnershipInfo(ownershipData) {
+            const ownershipInfoCard = document.getElementById('ownershipInfoCard');
+            const ownershipDevice = document.getElementById('ownershipDevice');
+            const ownershipClaimedAt = document.getElementById('ownershipClaimedAt');
+
+            const deviceInfo = `${ownershipData.device_make} ${ownershipData.device_model}`;
+            ownershipDevice.textContent = deviceInfo !== 'Unknown Unknown' ? deviceInfo : 'Unknown Device';
+
+            if (ownershipData.claimed_at) {
+                try {
+                    const claimedDate = new Date(ownershipData.claimed_at);
+                    ownershipClaimedAt.textContent = claimedDate.toLocaleString('en-US', {
+                        year: 'numeric', month: 'long', day: 'numeric',
+                        hour: '2-digit', minute: '2-digit'
+                    });
+                } catch (e) {
+                    ownershipClaimedAt.textContent = ownershipData.claimed_at;
+                }
+            }
+
+            ownershipInfoCard.style.display = 'block';
+        }
+
+        function showUnauthorizedMessage() {
+            // Hide all product-related cards
+            document.getElementById('productCard').style.display = 'none';
+            document.getElementById('scanActivityCard').style.display = 'none';
+            document.getElementById('ownershipInfoCard').style.display = 'none';
+
+            // Show claimed message
+            const claimCard = document.getElementById('claimOwnershipCard');
+            claimCard.innerHTML = `
+                <div style="text-align: center; padding: var(--spacing-lg);">
+                    <div style="width: 80px; height: 80px; margin: 0 auto var(--spacing-md); border-radius: 50%; background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%); display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 32px rgba(245, 158, 11, 0.35);">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                        </svg>
+                    </div>
+                    <h2 style="font-size: 1.5rem; font-weight: 700; color: var(--gray-800); margin-bottom: var(--spacing-sm);">Product Already Claimed</h2>
+                    <p style="font-size: 1rem; color: var(--gray-600); line-height: 1.6; max-width: 400px; margin: 0 auto;">
+                        This product has been registered to another device. Only the original owner's device can access product details.
+                    </p>
+                    <div style="margin-top: var(--spacing-lg); padding: var(--spacing-md); background: var(--gray-100); border-radius: var(--radius-lg);">
+                        <p style="font-size: 0.85rem; color: var(--gray-500); margin: 0;">
+                            If you believe this is an error or you are the rightful owner, please contact customer support.
+                        </p>
+                    </div>
+                </div>
+            `;
+            claimCard.style.display = 'block';
+
+            // Hide report button for claimed products scanned by others
+            document.getElementById('reportBtn').style.display = 'none';
+        }
+
+        function showClaimOwnershipForm() {
+            const claimCard = document.getElementById('claimOwnershipCard');
+            claimCard.style.display = 'block';
+
+            const claimBtn = document.getElementById('claimOwnershipBtn');
+            claimBtn.addEventListener('click', handleClaimOwnership);
+        }
+
+        function applyBlurToProductValues() {
+            document.querySelectorAll('.field-value').forEach(el => {
+                el.classList.add('blurred');
+            });
+        }
+
+        async function handleClaimOwnership() {
+            const otpInput = document.getElementById('otpInput');
+            const ownerName = document.getElementById('ownerName');
+            const ownerPhone = document.getElementById('ownerPhone');
+            const claimBtn = document.getElementById('claimOwnershipBtn');
+            const claimError = document.getElementById('claimError');
+
+            const otp = otpInput.value.trim();
+            const name = ownerName.value.trim();
+            const phone = ownerPhone.value.trim();
+
+            // Validate inputs
+            if (!otp || !name || !phone) {
+                claimError.textContent = 'Please fill in all fields.';
+                claimError.style.display = 'block';
+                return;
+            }
+
+            if (otp.length !== 6) {
+                claimError.textContent = 'OTP must be 6 digits.';
+                claimError.style.display = 'block';
+                return;
+            }
+
+            // Disable button during submission
+            claimBtn.disabled = true;
+            claimError.style.display = 'none';
+
+            try {
+                const fingerprint = await generateDeviceFingerprint();
+                const deviceInfo = getDeviceInfo();
+
+                const response = await fetch('/api/claim_ownership', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        token: currentToken,
+                        product_id: currentProductId || currentBatchId || currentToken,  // Fallback chain
+                        batch_id: currentBatchId,
+                        otp_code: otp,
+                        owner_name: name,
+                        owner_phone: phone,
+                        device_fingerprint: fingerprint,
+                        device_make: deviceInfo.make,
+                        device_model: deviceInfo.model
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Hide claim form
+                    document.getElementById('claimOwnershipCard').style.display = 'none';
+
+                    // Show ownership info
+                    showOwnershipInfo({
+                        device_make: data.device_make,
+                        device_model: data.device_model,
+                        claimed_at: new Date().toISOString()
+                    });
+
+                    // Remove blur
+                    document.querySelectorAll('.field-value').forEach(el => {
+                        el.classList.remove('blurred');
+                    });
+                } else {
+                    claimError.textContent = data.message || 'Failed to claim ownership. Please try again.';
+                    claimError.style.display = 'block';
+                    claimBtn.disabled = false;
+                }
+            } catch (error) {
+                console.error('Failed to claim ownership:', error);
+                claimError.textContent = 'Network error. Please try again.';
+                claimError.style.display = 'block';
+                claimBtn.disabled = false;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const resultData = sessionStorage.getItem('verificationResult');
+
+            if (!resultData) {
+                window.location.href = '/';
+                return;
+            }
+
+            try {
+                const data = JSON.parse(resultData);
+                renderResults(data);
+                sessionStorage.removeItem('verificationResult');
+            } catch (e) {
+                console.error('Failed to parse verification data:', e);
+                window.location.href = '/';
+            }
+        });
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        // Friendly labels for database column names
+        const LABEL_MAP = {
+            'product_id': 'Product ID',
+            'batch': 'Batch Number',
+            'date': 'Manufacturing Date',
+            'brandid': 'Brand ID',
+            'is_submit': 'Status',
+            'product_name': 'Product Name',
+            'product_description': 'Description',
+            'category': 'Category',
+            'manufacturer': 'Manufacturer',
+            'expiry_date': 'Expiry Date',
+            'serial_number': 'Serial Number',
+            'sku': 'SKU',
+            'weight': 'Weight',
+            'origin': 'Country of Origin',
+            'price': 'Price',
+        };
+
+        function formatFieldLabel(key) {
+            if (LABEL_MAP[key]) return LABEL_MAP[key];
+            // Convert snake_case to Title Case
+            return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        }
+
+        function formatFieldValue(key, value) {
+            if (value === null || value === undefined) return '-';
+
+            if (key === 'is_submit') {
+                return value == 1 ? 'Active' : 'Inactive';
+            }
+
+            if ((key === 'date' || key === 'expiry_date' || key.includes('date')) && value) {
+                try {
+                    const d = new Date(value);
+                    if (!isNaN(d.getTime())) {
+                        return d.toLocaleDateString('en-US', {
+                            year: 'numeric', month: 'long', day: 'numeric'
+                        });
+                    }
+                } catch (e) { /* fall through */ }
+            }
+
+            return String(value);
+        }
+
+        function formatDevice(scan) {
+            const make = scan.device_make || '';
+            const model = scan.device_model || '';
+            if (make && model && make !== 'Unknown' && model !== 'Unknown') {
+                return make + ' ' + model;
+            }
+            if (model && model !== 'Unknown') return model;
+            if (make && make !== 'Unknown') return make;
+            return 'Unknown';
+        }
+
+        function renderResults(data) {
+            const statusIconRing = document.getElementById('statusIconRing');
+            const statusLabel = document.getElementById('statusLabel');
+            const reasonCard = document.getElementById('reasonCard');
+            const reasonText = document.getElementById('reasonText');
+            const productCard = document.getElementById('productCard');
+            const productFields = document.getElementById('productFields');
+            const reportBtn = document.getElementById('reportBtn');
+            const timestamp = document.getElementById('timestamp');
+
+            const status = (data.status || '').toUpperCase();
+            const isAuthentic = status.includes('AUTHENTIC');
+            const isSuspect = status.includes('SUSPECT');
+            const isFake = status.includes('FAKE') || (!isAuthentic && !isSuspect);
+
+            // Extract token and product info for ownership claiming
+            const urlParams = new URLSearchParams(window.location.search);
+            currentToken = urlParams.get('token') || sessionStorage.getItem('currentToken') || '';
+            const product = data.product || {};
+            // Use fallback identifiers if product_id is missing
+            currentProductId = product.product_id || product.productid || product.id || product.batch || '';
+            currentBatchId = product.batch || product.batch_id || product.batchid || '';
+
+            // Store token for potential reuse
+            if (currentToken) {
+                sessionStorage.setItem('currentToken', currentToken);
+            }
+
+            // --- Status icon & label ---
+            statusIconRing.classList.remove('verified', 'failed', 'suspect');
+            statusLabel.classList.remove('verified', 'failed', 'suspect');
+            reasonCard.classList.remove('verified-border', 'failed-border', 'suspect-border');
+
+            if (isAuthentic) {
+                statusIconRing.classList.add('verified');
+                statusLabel.classList.add('verified');
+                reasonCard.classList.add('verified-border');
+                statusIconRing.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+                statusLabel.textContent = 'VERIFIED';
+            } else if (isSuspect) {
+                statusIconRing.classList.add('suspect');
+                statusLabel.classList.add('suspect');
+                reasonCard.classList.add('suspect-border');
+                statusIconRing.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`;
+                statusLabel.textContent = 'SUSPECT';
+                reportBtn.style.display = 'inline-flex';
+            } else {
+                statusIconRing.classList.add('failed');
+                statusLabel.classList.add('failed');
+                reasonCard.classList.add('failed-border');
+                statusIconRing.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
+                statusLabel.textContent = 'NOT VERIFIED';
+                reportBtn.style.display = 'inline-flex';
+            }
+
+            // --- Reason ---
+            reasonText.textContent = data.reason || 'No additional details available.';
+
+            // --- Product fields ---
+            const entries = Object.entries(product);
+
+            if (entries.length > 0) {
+                productCard.style.display = 'block';
+
+                productFields.innerHTML = entries.map(([key, value]) => `
+                    <div class="product-field">
+                        <span class="field-label">${escapeHtml(formatFieldLabel(key))}</span>
+                        <span class="field-value">${escapeHtml(formatFieldValue(key, value))}</span>
+                    </div>
+                `).join('');
+            }
+
+            // --- Scan Activity ---
+            const scanHistory = data.scan_history || {};
+            const scanCount = scanHistory.scan_count || 0;
+            const recentScans = scanHistory.recent_scans || [];
+            const scanActivityCard = document.getElementById('scanActivityCard');
+            const scanLogWrapper = document.getElementById('scanLogWrapper');
+
+            if (scanCount > 0) {
+                scanActivityCard.style.display = 'block';
+
+                if (recentScans.length > 0) {
+                    scanLogWrapper.innerHTML = `
+                        <table class="scan-log-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Location</th>
+                                    <th>Device</th>
+                                    <th>Date & Time</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${recentScans.map((scan, i) => {
+                                    const loc = scan.country && scan.country !== 'Unknown' ? scan.country : (scan.lat && scan.lng ? scan.lat.toFixed(2) + ', ' + scan.lng.toFixed(2) : 'Unknown');
+                                    const dev = formatDevice(scan);
+                                    let dateStr = '-';
+                                    if (scan.scanned_at) {
+                                        try {
+                                            dateStr = new Date(scan.scanned_at).toLocaleString('en-US', {
+                                                month: 'short', day: 'numeric', year: 'numeric',
+                                                hour: '2-digit', minute: '2-digit'
+                                            });
+                                        } catch(e) { dateStr = scan.scanned_at; }
+                                    }
+                                    return `
+                                        <tr>
+                                            <td>${i + 1}</td>
+                                            <td>${escapeHtml(loc)}</td>
+                                            <td><span class="device-text" title="${escapeHtml(dev)}">${escapeHtml(dev)}</span></td>
+                                            <td>${escapeHtml(dateStr)}</td>
+                                        </tr>
+                                    `;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    `;
+                }
+            }
+
+            // --- Timestamp ---
+            timestamp.textContent = 'Verified on ' + new Date().toLocaleString();
+
+            // --- Report button ---
+            reportBtn.addEventListener('click', () => {
+                alert('Thank you for reporting. Our team will investigate this product.');
+            });
+
+            // --- Check ownership status (only for authentic products) ---
+            console.log('DEBUG - isAuthentic:', isAuthentic);
+            console.log('DEBUG - currentToken:', currentToken);
+            console.log('DEBUG - currentProductId:', currentProductId);
+            console.log('DEBUG - currentBatchId:', currentBatchId);
+            console.log('DEBUG - product data:', product);
+
+            // Show OTP form for authentic products - token is the primary identifier
+            // product_id or batch can be used as fallback identifiers
+            if (isAuthentic && currentToken) {
+                console.log('DEBUG - Calling checkOwnershipStatus');
+                checkOwnershipStatus(currentToken);
+            } else {
+                console.log('DEBUG - NOT calling checkOwnershipStatus. Reason:', {
+                    isAuthentic,
+                    hasToken: !!currentToken,
+                    hasProductId: !!currentProductId,
+                    hasBatchId: !!currentBatchId
+                });
+                // If not authentic but has token, still show why ownership can't be claimed
+                if (!isAuthentic && currentToken) {
+                    console.log('DEBUG - Product not authentic, ownership claiming disabled');
+                }
+            }
+        }
+    </script>
+</body>
+<!-- VERSION: 2026-01-28 - OTP form fix: added fallback identifiers and relaxed conditions -->
+</html>

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reput - QR Code Scanner</title>
+    <meta name="description" content="Upload and scan QR codes with Reput's advanced anti-counterfeiting system">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header Section -->
+        <header class="header">
+            <div class="brand-container">
+                <img src="/static/image.png" alt="Reput Logo" class="logo-image">
+                <div class="brand-text">
+                    <h1 class="brand-name">RePut.ai</h1>
+                    <p class="company-tagline">Your only source of truth</p>
+                </div>
+            </div>
+            <p class="tagline">Advanced Anti-Counterfeiting Solution</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="scanner-card">
+                <div class="card-header">
+                    <h1>QR Code Scanner</h1>
+                    <p>Point your camera at a QR code to verify</p>
+                </div>
+
+                <!-- Camera Viewfinder (always visible) -->
+                <div class="viewfinder-wrapper">
+                    <div class="viewfinder" id="viewfinder">
+                        <video id="video" autoplay playsinline></video>
+
+                        <!-- Upload preview (replaces video when image uploaded) -->
+                        <img id="previewImage" class="preview-img hidden" alt="QR Code Preview">
+
+                        <!-- Scan overlay with corner brackets -->
+                        <div class="scan-overlay" id="scanOverlay">
+                            <div class="scan-frame">
+                                <span class="corner corner-tl"></span>
+                                <span class="corner corner-tr"></span>
+                                <span class="corner corner-bl"></span>
+                                <span class="corner corner-br"></span>
+                            </div>
+                            <div class="scan-line"></div>
+                        </div>
+
+                        <!-- Camera permission prompt -->
+                        <div class="camera-prompt hidden" id="cameraPrompt">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <line x1="3" y1="12" x2="21" y2="12"></line>
+                            </svg>
+                            <p>Camera access needed</p>
+                            <button class="btn-allow" onclick="startCamera()">Enable Camera</button>
+                        </div>
+                    </div>
+
+                    <!-- Upload button at bottom of viewfinder -->
+                    <input type="file" id="fileInput" accept="image/*" hidden>
+                    <button class="btn-upload" id="uploadBtn" onclick="document.getElementById('fileInput').click()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        Upload QR Image
+                    </button>
+                </div>
+
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>&copy; 2026 Reput. All rights reserved.</p>
+        </footer>
+    </div>
+
+    <!-- Include QR Code Scanner Library -->
+    <script src="https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"></script>
+    <script src="/static/script.js"></script>
+</body>
+
+</html>

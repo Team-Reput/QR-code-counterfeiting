@@ -1,0 +1,7 @@
+flask
+flask-cors
+psycopg2-binary
+qrcode[pil]
+Pillow
+cryptography
+geopy
