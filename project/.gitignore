@@ -1,0 +1,21 @@
+# Virtual Environments
+venv/
+env/
+.env
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Security Keys - NEVER UPLOAD
+private_key.pem
+
+# Generated Output
+qr_output/
+*.png
+
+# Optional/Temporary files
+sample_products.csv
+sample_products_extended.xlsx
+otp_codes_test.csv
+my.png

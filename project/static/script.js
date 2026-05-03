@@ -49,7 +49,7 @@ async function getDeviceInfo() {
         "model", "platform", "platformVersion", "fullVersionList"
       ]);
       if (hints.platform) make = hints.platform;         // e.g. "Android", "Windows"
-      if (hints.model)    model = hints.model;            // e.g. "SM-S911B", "Pixel 8"
+      if (hints.model) model = hints.model;            // e.g. "SM-S911B", "Pixel 8"
       if (make !== "Unknown" && model && model !== "") {
         return { device_make: make, device_model: model };
       }
@@ -86,10 +86,10 @@ async function getDeviceInfo() {
   }
 
   // Desktop fallback
-  if (/Macintosh/i.test(ua))   return { device_make: "Apple", device_model: "Mac" };
-  if (/Windows/i.test(ua))     return { device_make: "Microsoft", device_model: "Windows PC" };
-  if (/Linux/i.test(ua))       return { device_make: "Linux", device_model: "Desktop" };
-  if (/CrOS/i.test(ua))        return { device_make: "Google", device_model: "Chromebook" };
+  if (/Macintosh/i.test(ua)) return { device_make: "Apple", device_model: "Mac" };
+  if (/Windows/i.test(ua)) return { device_make: "Microsoft", device_model: "Windows PC" };
+  if (/Linux/i.test(ua)) return { device_make: "Linux", device_model: "Desktop" };
+  if (/CrOS/i.test(ua)) return { device_make: "Google", device_model: "Chromebook" };
 
   return { device_make: make, device_model: model };
 }
@@ -131,12 +131,24 @@ async function getDeviceFingerprint() {
     }
   } catch (e) { parts.push('no-webgl'); }
 
-  // Hash it
+  // Hash it — use WebCrypto (HTTPS/localhost) or fallback djb2 (plain HTTP)
   const raw = parts.join('|');
-  const msgBuf = new TextEncoder().encode(raw);
-  const hashBuf = await crypto.subtle.digest('SHA-256', msgBuf);
-  const hashArr = Array.from(new Uint8Array(hashBuf));
-  cachedFingerprint = hashArr.map(b => b.toString(16).padStart(2, '0')).join('');
+  if (window.isSecureContext && crypto && crypto.subtle) {
+    // Secure context: use SHA-256 via WebCrypto API
+    const msgBuf = new TextEncoder().encode(raw);
+    const hashBuf = await crypto.subtle.digest('SHA-256', msgBuf);
+    const hashArr = Array.from(new Uint8Array(hashBuf));
+    cachedFingerprint = hashArr.map(b => b.toString(16).padStart(2, '0')).join('');
+  } else {
+    // Non-secure context (plain HTTP LAN): pure-JS djb2 hash fallback
+    let h = 5381;
+    for (let i = 0; i < raw.length; i++) {
+      h = ((h << 5) + h) ^ raw.charCodeAt(i);
+      h = h >>> 0; // keep unsigned 32-bit
+    }
+    // Pad to 64 hex chars to match SHA-256 length appearance
+    cachedFingerprint = h.toString(16).padStart(8, '0').repeat(8);
+  }
   return cachedFingerprint;
 }
 
