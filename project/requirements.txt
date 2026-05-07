@@ -6,3 +6,5 @@ Pillow
 cryptography
 geopy
 openpyxl
+opencv-python-headless
+numpy

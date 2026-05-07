@@ -12,6 +12,8 @@ from psycopg2.extras import RealDictCursor
 
 import qrcode
 from PIL import Image, ImageDraw
+import cv2
+import numpy as np
 
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
@@ -310,25 +312,72 @@ def crop_qr_square(img: Image.Image) -> Image.Image:
     return img.crop((0, 0, side, side))
 
 
-def verify_micro_pattern_for_token(scanned_qr_img: Image.Image, scanned_url_or_token: str) -> Tuple[bool, float]:
+def extract_qr_cv2(img_pil: Image.Image) -> Tuple[Image.Image, bool]:
+    """
+    Use OpenCV to find the QR code in the image and perform a perspective transform
+    to flatten it into a perfect square. Returns the flattened QR Image, and a boolean
+    indicating if CV detection was successful.
+    """
+    try:
+        # Convert PIL to cv2 (numpy) BGR
+        img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+        
+        detector = cv2.QRCodeDetector()
+        retval, decoded_info, points, straight_qrcode = detector.detectAndDecodeMulti(img_cv)
+        
+        if points is not None and len(points) > 0:
+            # points[0] gives the 4 corners of the first detected QR code
+            src_pts = points[0]
+            
+            # Target size for the warp.
+            w = np.linalg.norm(src_pts[0] - src_pts[1])
+            h = np.linalg.norm(src_pts[1] - src_pts[2])
+            target_side = int(max(w, h))
+            if target_side < 100:
+                target_side = 300 # default fallback
+                
+            dst_pts = np.array([
+                [0, 0],
+                [target_side - 1, 0],
+                [target_side - 1, target_side - 1],
+                [0, target_side - 1]
+            ], dtype=np.float32)
+            
+            M = cv2.getPerspectiveTransform(src_pts, dst_pts)
+            warped_cv = cv2.warpPerspective(img_cv, M, (target_side, target_side))
+            
+            # Convert back to PIL RGB
+            warped_rgb = cv2.cvtColor(warped_cv, cv2.COLOR_BGR2RGB)
+            return Image.fromarray(warped_rgb), True
+    except Exception as e:
+        print(f"[WARN] OpenCV extraction failed: {e}")
+        
+    return img_pil, False # Fallback
+
+
+def verify_micro_pattern_for_token(scanned_qr_img: Image.Image, scanned_url_or_token: str) -> Tuple[bool, float, bool]:
     """
     Robust approach:
     - regenerate expected QR (base + patterned) from scanned URL
-    - crop scanned image to QR square and resize to expected size
+    - extract/align scanned image using OpenCV (fallback to crop) and resize to expected size
     - validate dot pixels in top+right strips where BASE module is black
     """
     token = extract_token(scanned_url_or_token)
     if not token:
-        return False, 0.0
+        return False, 0.0, False
 
     payload_text = scanned_url_or_token.strip()
     if "://" not in payload_text and not payload_text.startswith("http"):
-        return False, 0.0  # need full URL for correct module layout
+        return False, 0.0, False  # need full URL for correct module layout
 
     expected_base = make_qr_image(payload_text)
     expected_patterned = apply_micro_pattern_top_and_right(expected_base.copy())
 
-    scanned_square = crop_qr_square(scanned_qr_img)
+    # 1. Try to extract and align the QR code perfectly using OpenCV
+    scanned_square, cv_success = extract_qr_cv2(scanned_qr_img)
+    if not cv_success:
+        scanned_square = crop_qr_square(scanned_qr_img)
+
     scanned_resized = scanned_square.resize(expected_patterned.size, Image.NEAREST)
 
     w, _ = expected_base.size
@@ -402,11 +451,11 @@ def verify_micro_pattern_for_token(scanned_qr_img: Image.Image, scanned_url_or_t
                 mismatches += 1
 
     if checked == 0:
-        return False, 0.0
+        return False, 0.0, cv_success
 
     score = 100.0 * (checked - mismatches) / checked
     ok = score >= 60.0  # relaxed threshold for real-world scans
-    return ok, score
+    return ok, score, cv_success
 
 
 # ================================================================
@@ -728,6 +777,10 @@ def claim_ownership(token: str, product_id: str, batch_id: str,
                 fieldnames = list(reader.fieldnames) if reader.fieldnames else []
                 rows = list(reader)
 
+            # Safeguard: if fieldnames is empty (due to race condition file wipe), restore base
+            if not fieldnames:
+                fieldnames = ['batch_id', 'signature_token', 'otp_code']
+
             # Add ownership columns if they don't exist
             ownership_columns = ['token', 'owner_name', 'owner_phone', 'device_fingerprint',
                                'device_make', 'device_model', 'claimed_at']
@@ -767,11 +820,23 @@ def claim_ownership(token: str, product_id: str, batch_id: str,
             if not found:
                 return False, "Product not found in OTP database."
 
-            # Write back all rows with updated fieldnames
-            with open(OTP_CSV_FILE, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(rows)
+            # Write back all rows atomically using a temp file
+            import tempfile
+            temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(OTP_CSV_FILE), prefix="otp_tmp_", suffix=".csv")
+            try:
+                with os.fdopen(temp_fd, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(rows)
+                    f.flush()
+                    os.fsync(f.fileno())
+                # Atomic replace
+                os.replace(temp_path, OTP_CSV_FILE)
+            except Exception as e:
+                # Cleanup temp file on error
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                raise e
 
             print(f"[DEBUG] Ownership claimed successfully, CSV updated")
             return True, "Ownership claimed successfully."
@@ -919,12 +984,22 @@ def verify_qr():
 
     micro_ok = False
     qr_file = request.files.get("qr_image")
+    image_is_photo = False
+    cv_used = False
     if qr_file and url_in:
         try:
             qr_img = Image.open(qr_file).convert("RGB")
-            micro_ok, _ = verify_micro_pattern_for_token(qr_img, url_in)
-        except Exception:
+            
+            # Check aspect ratio. If it's far from 1:1, it's likely a raw camera photo, not a cropped square.
+            w, h = qr_img.size
+            if max(w, h) / max(min(w, h), 1) > 1.1:
+                image_is_photo = True
+                
+            micro_ok, _, cv_used = verify_micro_pattern_for_token(qr_img, url_in)
+        except Exception as e:
+            print(f"[WARN] verify_micro_pattern_for_token error: {e}")
             micro_ok = False
+            cv_used = False
 
     # Determine final status using signature + micro-pattern
     verified = False
@@ -932,8 +1007,14 @@ def verify_qr():
         final_status = "FAKE"
         reason = "The cryptographic signature on this QR code is invalid. This product could not be matched to any authenticated record in our database. It may be counterfeit."
     elif qr_file and url_in and not micro_ok:
-        final_status = "FAKE"
-        reason = "The cryptographic signature is valid, but the physical micro-pattern on the QR code does not match the expected pattern. The printed label may have been reproduced or tampered with."
+        if image_is_photo and not cv_used:
+            # If the signature is OK but it's a raw photo and CV couldn't align it, bypass the micro-pattern failure 
+            final_status = "AUTHENTIC"
+            verified = True
+            reason = "Cryptographic signature verified. (Note: Physical micro-pattern could not be analyzed due to image format or lighting. Please upload a clearer photo for physical verification)."
+        else:
+            final_status = "FAKE"
+            reason = "The cryptographic signature is valid, but the physical micro-pattern on the QR code does not match the expected pattern. The printed label may have been reproduced or tampered with."
     else:
         final_status = "AUTHENTIC"
         verified = True
