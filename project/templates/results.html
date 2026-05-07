@@ -669,28 +669,42 @@
 
         // Device fingerprinting
         async function generateDeviceFingerprint() {
+            // const components = [
+            //     navigator.userAgent,
+            //     navigator.language,
+            //     screen.width,
+            //     screen.height,
+            //     screen.colorDepth,
+            //     new Date().getTimezoneOffset(),
+            //     navigator.hardwareConcurrency || 'unknown',
+            //     navigator.platform
+            // ];
+
             const components = [
-                navigator.userAgent,
-                navigator.language,
-                screen.width,
-                screen.height,
-                screen.colorDepth,
-                new Date().getTimezoneOffset(),
-                navigator.hardwareConcurrency || 'unknown',
-                navigator.platform
-            ];
+                    navigator.userAgent,
+                    navigator.language || '',
+                    (navigator.languages || []).join(','),
+                    String(screen.width),
+                    String(screen.height),
+                    String(screen.colorDepth),
+                    String(new Date().getTimezoneOffset()),
+                    String(navigator.hardwareConcurrency || 0),
+                    navigator.platform || ''
+                    // ← canvas removed; it's blocked on iOS/Firefox private mode
+                ];
+
 
             // Canvas fingerprint
-            try {
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                ctx.textBaseline = 'top';
-                ctx.font = '14px Arial';
-                ctx.fillText('fingerprint', 2, 2);
-                components.push(canvas.toDataURL());
-            } catch (e) {
-                components.push('no-canvas');
-            }
+            // try {
+            //     const canvas = document.createElement('canvas');
+            //     const ctx = canvas.getContext('2d');
+            //     ctx.textBaseline = 'top';
+            //     ctx.font = '14px Arial';
+            //     ctx.fillText('fingerprint', 2, 2);
+            //     components.push(canvas.toDataURL());
+            // } catch (e) {
+            //     components.push('no-canvas');
+            // }
 
             const fingerprint = components.join('|');
             const msgUint8 = new TextEncoder().encode(fingerprint);
@@ -899,11 +913,15 @@
                     // Hide claim form
                     document.getElementById('claimOwnershipCard').style.display = 'none';
 
+                    // Treat a fresh claim as an authorized device
+                    isOwnershipClaimed = true;
+                    isDeviceAuthorized = true;
+
                     // Show ownership info
                     showOwnershipInfo({
                         device_make: data.device_make,
                         device_model: data.device_model,
-                        claimed_at: new Date().toISOString()
+                        claimed_at: data.claimed_at  // from server
                     });
 
                     // Remove blur
@@ -924,21 +942,31 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
-            const resultData = sessionStorage.getItem('verificationResult');
 
-            if (!resultData) {
-                window.location.href = '/';
-                return;
-            }
+            const resultData = localStorage.getItem('verificationResult');
+            const resultTs = localStorage.getItem('verificationResultTs');
+ 
 
-            try {
-                const data = JSON.parse(resultData);
-                renderResults(data);
-                sessionStorage.removeItem('verificationResult');
-            } catch (e) {
-                console.error('Failed to parse verification data:', e);
-                window.location.href = '/';
-            }
+             // Expire after 5 minutes to survive refresh but not linger forever
+                    const expired = !resultTs || (Date.now() - Number(resultTs)) > 300000;
+
+                    if (!resultData || expired) {
+                        localStorage.removeItem('verificationResult');
+                        localStorage.removeItem('verificationResultTs');
+                        window.location.href = '/';
+                        return;
+                    }
+
+                    try {
+                        const data = JSON.parse(resultData);
+                        renderResults(data);
+                        // Don't remove here — let it survive refreshes until it expires or a new scan overwrites it
+                    } catch (e) {
+                        console.error('Failed to parse verification data:', e);
+                        localStorage.removeItem('verificationResult');
+                        localStorage.removeItem('verificationResultTs');
+                        window.location.href = '/';
+                    }
         });
 
         function escapeHtml(str) {
@@ -1024,7 +1052,9 @@
 
             // Extract token and product info for ownership claiming
             const urlParams = new URLSearchParams(window.location.search);
-            currentToken = urlParams.get('token') || sessionStorage.getItem('currentToken') || '';
+            // currentToken = urlParams.get('token') || sessionStorage.getItem('currentToken') || '';
+            currentToken = urlParams.get('token') || localStorage.getItem('currentToken') || '';
+
             const product = data.product || {};
             // Use fallback identifiers if product_id is missing
             currentProductId = product.product_id || product.productid || product.id || product.batch || '';
@@ -1032,7 +1062,8 @@
 
             // Store token for potential reuse
             if (currentToken) {
-                sessionStorage.setItem('currentToken', currentToken);
+                // sessionStorage.setItem('currentToken', currentToken);
+                localStorage.setItem('currentToken', currentToken);
             }
 
             // --- Status icon & label ---
@@ -1068,7 +1099,7 @@
             // --- Product fields ---
             const entries = Object.entries(product);
 
-            if (entries.length > 0) {
+            if (entries.length > 0 && isAuthentic) {
                 productCard.style.display = 'block';
 
                 productFields.innerHTML = entries.map(([key, value]) => `
@@ -1078,6 +1109,7 @@
                     </div>
                 `).join('');
             }
+ 
 
             // --- Scan Activity ---
             const scanHistory = data.scan_history || {};

@@ -109,27 +109,27 @@ async function getDeviceFingerprint() {
   parts.push(navigator.hardwareConcurrency || '');
 
   // Canvas fingerprint
-  try {
-    const c = document.createElement('canvas');
-    c.width = 200; c.height = 50;
-    const ctx = c.getContext('2d');
-    ctx.textBaseline = 'top';
-    ctx.font = '14px Arial';
-    ctx.fillStyle = '#f60';
-    ctx.fillRect(10, 0, 100, 30);
-    ctx.fillStyle = '#069';
-    ctx.fillText('fingerprint', 2, 15);
-    parts.push(c.toDataURL());
-  } catch (e) { parts.push('no-canvas'); }
+  // try {
+  //   const c = document.createElement('canvas');
+  //   c.width = 200; c.height = 50;
+  //   const ctx = c.getContext('2d');
+  //   ctx.textBaseline = 'top';
+  //   ctx.font = '14px Arial';
+  //   ctx.fillStyle = '#f60';
+  //   ctx.fillRect(10, 0, 100, 30);
+  //   ctx.fillStyle = '#069';
+  //   ctx.fillText('fingerprint', 2, 15);
+  //   parts.push(c.toDataURL());
+  // } catch (e) { parts.push('no-canvas'); }
 
-  // WebGL renderer
-  try {
-    const gl = document.createElement('canvas').getContext('webgl');
-    if (gl) {
-      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
-      if (dbg) parts.push(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
-    }
-  } catch (e) { parts.push('no-webgl'); }
+  // // WebGL renderer
+  // try {
+  //   const gl = document.createElement('canvas').getContext('webgl');
+  //   if (gl) {
+  //     const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+  //     if (dbg) parts.push(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
+  //   }
+  // } catch (e) { parts.push('no-webgl'); }
 
   // Hash it — use WebCrypto (HTTPS/localhost) or fallback djb2 (plain HTTP)
   const raw = parts.join('|');
@@ -205,13 +205,14 @@ async function verifyWithBackend(decodedUrl, qrFileOrBlob) {
 // Navigate to results page
 // -------------------------------------------------------------
 function goToResults(data, scannedUrl = '') {
-  sessionStorage.setItem('verificationResult', JSON.stringify(data));
+  localStorage.setItem('verificationResult', JSON.stringify(data));
+  localStorage.setItem('verificationResultTs', Date.now());
 
   // Extract and store token for ownership claiming
   if (scannedUrl) {
     const token = extractTokenFromUrlText(scannedUrl);
     if (token) {
-      sessionStorage.setItem('currentToken', token);
+      localStorage.setItem('currentToken', token);
     }
   }
 
