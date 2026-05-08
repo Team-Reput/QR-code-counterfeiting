@@ -210,7 +210,7 @@ def apply_micro_pattern_top_and_right(qr_img: Image.Image) -> Image.Image:
     timing_row = QR_BORDER + 6
     timing_col = QR_BORDER + 6
 
-    dot_r  = max(1, QR_BOX_SIZE // 8)
+    dot_r  = max(2, QR_BOX_SIZE // 4)
     offset = max(1, QR_BOX_SIZE // 3)
 
     top_y_start   = QR_BORDER

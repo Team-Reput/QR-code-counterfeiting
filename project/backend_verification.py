@@ -266,7 +266,7 @@ def apply_micro_pattern_top_and_right(qr_img: Image.Image) -> Image.Image:
     timing_row = QR_BORDER + 6
     timing_col = QR_BORDER + 6
 
-    dot_r = max(1, QR_BOX_SIZE // 8)
+    dot_r = max(2, QR_BOX_SIZE // 4)
     offset = max(1, QR_BOX_SIZE // 3)
 
     top_y_start = QR_BORDER
@@ -378,7 +378,7 @@ def verify_micro_pattern_for_token(scanned_qr_img: Image.Image, scanned_url_or_t
     if not cv_success:
         scanned_square = crop_qr_square(scanned_qr_img)
 
-    scanned_resized = scanned_square.resize(expected_patterned.size, Image.NEAREST)
+    scanned_resized = scanned_square.resize(expected_patterned.size, Image.LANCZOS)
 
     w, _ = expected_base.size
     modules = w // QR_BOX_SIZE
@@ -389,7 +389,7 @@ def verify_micro_pattern_for_token(scanned_qr_img: Image.Image, scanned_url_or_t
     timing_row = QR_BORDER + 6
     timing_col = QR_BORDER + 6
 
-    dot_r = max(1, QR_BOX_SIZE // 8)
+    dot_r = max(2, QR_BOX_SIZE // 4)
     offset = max(1, QR_BOX_SIZE // 3)
 
     def in_quiet_zone(mx: int, my: int) -> bool:
