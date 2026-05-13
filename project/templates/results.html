@@ -562,7 +562,7 @@
             </div>
         </section>
 
-        <!-- Claim Ownership Card -->
+        <!-- OWNERSHIP_DISABLED_START
         <section id="claimOwnershipCard" class="claim-ownership-card" style="display: none;">
             <div class="claim-ownership-header">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -598,7 +598,6 @@
             </div>
         </section>
 
-        <!-- Ownership Info Card -->
         <section id="ownershipInfoCard" class="ownership-info-card" style="display: none;">
             <div class="ownership-info-header">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -618,15 +617,24 @@
                 </div>
             </div>
         </section>
+        OWNERSHIP_DISABLED_END -->
 
         <!-- Scan Activity Card -->
         <section id="scanActivityCard" class="scan-activity-card" style="display: none;">
-            <div class="scan-activity-header">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <polyline points="12 6 12 12 16 14"></polyline>
-                </svg>
-                <h2>Scan Activity</h2>
+            <div class="scan-activity-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polyline points="12 6 12 12 16 14"></polyline>
+                    </svg>
+                    <h2>Scan Activity</h2>
+                </div>
+                <button id="clearHistoryBtn"
+                    onclick="clearScanHistory()"
+                    style="display:none;padding:6px 14px;font-size:13px;border:1px solid #e53e3e;
+                           border-radius:6px;background:transparent;color:#e53e3e;cursor:pointer;">
+                    Clear Test History
+                </button>
             </div>
             <div id="scanLogWrapper">
                 <!-- Recent scans table filled dynamically -->
@@ -744,6 +752,7 @@
             return { make, model };
         }
 
+        /* OWNERSHIP_DISABLED_START
         async function checkOwnershipStatus(token) {
             const fingerprint = await generateDeviceFingerprint();
 
@@ -940,6 +949,7 @@
                 claimBtn.disabled = false;
             }
         }
+        OWNERSHIP_DISABLED_END */
 
         document.addEventListener('DOMContentLoaded', () => {
 
@@ -1120,6 +1130,8 @@
 
             if (scanCount > 0) {
                 scanActivityCard.style.display = 'block';
+                const clearBtn = document.getElementById('clearHistoryBtn');
+                if (clearBtn) clearBtn.style.display = 'inline-block';
 
                 if (recentScans.length > 0) {
                     scanLogWrapper.innerHTML = `
@@ -1175,8 +1187,7 @@
             console.log('DEBUG - currentBatchId:', currentBatchId);
             console.log('DEBUG - product data:', product);
 
-            // Show OTP form for authentic products - token is the primary identifier
-            // product_id or batch can be used as fallback identifiers
+            /* OWNERSHIP_DISABLED_START
             if (isAuthentic && currentToken) {
                 console.log('DEBUG - Calling checkOwnershipStatus');
                 checkOwnershipStatus(currentToken);
@@ -1187,10 +1198,46 @@
                     hasProductId: !!currentProductId,
                     hasBatchId: !!currentBatchId
                 });
-                // If not authentic but has token, still show why ownership can't be claimed
                 if (!isAuthentic && currentToken) {
                     console.log('DEBUG - Product not authentic, ownership claiming disabled');
                 }
+            }
+            OWNERSHIP_DISABLED_END */
+        }
+
+        async function clearScanHistory() {
+            if (!currentToken) {
+                alert('No token loaded — cannot clear history.');
+                return;
+            }
+            const confirmed = confirm(
+                'Delete all scan records for this QR token?\nThis cannot be undone.'
+            );
+            if (!confirmed) return;
+
+            const adminKey = prompt('Enter admin key:');
+            if (!adminKey) return;
+
+            try {
+                const resp = await fetch('/api/admin/clear_scan_history', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Key': adminKey,
+                    },
+                    body: JSON.stringify({ token: currentToken }),
+                });
+                const result = await resp.json();
+                if (!resp.ok) {
+                    alert('Error: ' + (result.error || resp.status));
+                    return;
+                }
+                alert(`Deleted ${result.deleted} scan record(s).`);
+                // Hide the scan activity card
+                const card = document.getElementById('scanActivityCard');
+                if (card) card.style.display = 'none';
+            } catch (e) {
+                alert('Request failed: ' + e.message);
             }
         }
     </script>

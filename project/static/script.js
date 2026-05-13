@@ -28,11 +28,26 @@ function extractTokenFromUrlText(decodedText) {
 
 function getGeo() {
   return new Promise((resolve) => {
-    if (!navigator.geolocation) return resolve({ lat: null, lng: null });
+    // Geolocation API requires a secure context (HTTPS or localhost).
+    // On plain HTTP LAN IPs the API is undefined or permission-denied.
+    if (!navigator.geolocation) {
+      const isInsecure = window.location.protocol === 'http:' &&
+        !['localhost', '127.0.0.1'].includes(window.location.hostname);
+      if (isInsecure) {
+        console.warn('[GEO] Geolocation unavailable — page served over plain HTTP. ' +
+          'Open via http://localhost or use HTTPS to enable location.');
+      } else {
+        console.warn('[GEO] Geolocation API not available in this browser.');
+      }
+      return resolve({ lat: null, lng: null });
+    }
 
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve({ lat: String(pos.coords.latitude), lng: String(pos.coords.longitude) }),
-      () => resolve({ lat: null, lng: null }),
+      (err) => {
+        console.warn('[GEO] getCurrentPosition failed:', err.code, err.message);
+        resolve({ lat: null, lng: null });
+      },
       { enableHighAccuracy: true, timeout: 8000 }
     );
   });
@@ -152,10 +167,14 @@ async function getDeviceFingerprint() {
   return cachedFingerprint;
 }
 
-async function verifyWithBackend(decodedUrl, qrFileOrBlob) {
+async function verifyWithBackend(decodedUrl, qrFileOrBlob, scanSource = 'camera') {
   const formData = new FormData();
 
   formData.append("url", decodedUrl);
+  // Tells the backend which verification path to use:
+  //   'file'   → file-upload path: only the exact original generated PNG is accepted
+  //   'camera' → camera-scan path: physical printed labels are accepted
+  formData.append("scan_source", scanSource);
 
   const token = extractTokenFromUrlText(decodedUrl);
   if (token) formData.append("token", token);
@@ -346,7 +365,7 @@ function startScanning() {
       context.drawImage(video, 0, 0, W, H);
 
       const jpegBlob = await new Promise(resolve =>
-        canvas.toBlob(resolve, 'image/jpeg', 0.55)   // ~55 % quality to save data
+        canvas.toBlob(resolve, 'image/jpeg', 0.85)   // 85% quality — lower values lose sub-4px detail needed for QR decoding
       );
 
       // ── Step 2: send frame to backend OpenCV decoder ─────────────
@@ -370,8 +389,18 @@ function startScanning() {
         return;   // QR not found yet — keep scanning
       }
 
-      // ── QR code found — stop live scanning ───────────────────────
+      // ── QR code found ────────────────────────────────────────────
+      // Step 3: FIRST capture a HIGH-QUALITY PNG BEFORE stopping the camera.
+      // The camera must still be live here so drawImage() gets a fresh,
+      // full-resolution frame — not a re-encode of the blurry 55%-JPEG
+      // decode frame that was used in Step 1.
+      hiResCanvas.width  = W;
+      hiResCanvas.height = H;
+      hiResCtx.drawImage(video, 0, 0, W, H);   // camera still live → fresh frame
+
+      // NOW stop scanning (hi-res frame already captured above)
       stopCamera();
+
       const decodedUrl = decodeData.url;
       const token      = extractTokenFromUrlText(decodedUrl);
 
@@ -385,11 +414,7 @@ function startScanning() {
         return;
       }
 
-      // ── Step 3: capture a HIGH-QUALITY PNG for counterfeit analysis
-      //    (uncompressed so micro-pattern dots and LSB bits survive)  ──
-      hiResCanvas.width  = W;
-      hiResCanvas.height = H;
-      hiResCtx.drawImage(video, 0, 0, W, H);   // note: video is stopped but last frame is still accessible
+      // hi-res canvas already drawn above (camera was live at that point)
 
       const hiResBlob = await new Promise(resolve =>
         hiResCanvas.toBlob(resolve, 'image/png')   // lossless
@@ -397,7 +422,7 @@ function startScanning() {
 
       // ── Step 4: send to /verify for full counterfeit analysis ─────
       try {
-        const resp = await verifyWithBackend(decodedUrl, hiResBlob);
+        const resp = await verifyWithBackend(decodedUrl, hiResBlob, 'camera');
         goToResults(resp, decodedUrl);
       } catch (err) {
         goToResults({
@@ -475,9 +500,9 @@ async function decodeQRFromImage(originalFile) {
       return;
     }
 
-    // Step 2: send original file (lossless PNG or high-res JPEG from device)
-    // to /verify for the full security pipeline
-    const resp = await verifyWithBackend(decodedUrl, originalFile);
+    // Step 2: send original file to /verify.
+    // scan_source='file' → backend only accepts the exact original generated PNG.
+    const resp = await verifyWithBackend(decodedUrl, originalFile, 'file');
     goToResults(resp, decodedUrl);
 
   } catch (err) {

@@ -67,10 +67,10 @@ csv_lock = threading.Lock()
 # MICRO_PATTERN_MIN_DIFF     : min brightness gain (dot area vs background).
 # MICRO_PATTERN_PASS_RATIO   : fraction of dots that must be visible.
 # ---------------------------------------------------------------------------
-SCREENSHOT_NOISE_THRESHOLD = float(os.getenv("SCREENSHOT_NOISE_THRESHOLD", "10.0"))
-SCREENSHOT_DIFF_THRESHOLD  = float(os.getenv("SCREENSHOT_DIFF_THRESHOLD",  "15.0"))
-MICRO_PATTERN_MIN_DIFF     = float(os.getenv("MICRO_PATTERN_MIN_DIFF",     "20.0"))
-MICRO_PATTERN_PASS_RATIO   = float(os.getenv("MICRO_PATTERN_PASS_RATIO",   "0.45"))
+SCREENSHOT_NOISE_THRESHOLD = float(os.getenv("SCREENSHOT_NOISE_THRESHOLD", "8.0"))
+SCREENSHOT_DIFF_THRESHOLD  = float(os.getenv("SCREENSHOT_DIFF_THRESHOLD",  "10.0"))
+MICRO_PATTERN_MIN_DIFF     = float(os.getenv("MICRO_PATTERN_MIN_DIFF",     "8.0"))   # was 15.0 — real prints survive blur/ink-spread
+MICRO_PATTERN_PASS_RATIO   = float(os.getenv("MICRO_PATTERN_PASS_RATIO",   "0.20"))  # was 0.35 — 20% visible dots is sufficient evidence
 
 
 # =================================================================
@@ -327,6 +327,48 @@ def crop_qr_square(img: Image.Image) -> Image.Image:
     return img.crop((0, 0, side, side))
 
 
+def _contour_crop_qr(img_pil: Image.Image) -> Image.Image:
+    """
+    Improved alignment fallback (used when OpenCV QR corner detection fails).
+    Finds the largest near-square dark region via contour detection and crops
+    to it with a small margin.  Much better than a blind min(w,h) square crop
+    when the QR occupies only a sub-region of a larger photo.
+    Falls back to crop_qr_square if contour detection fails.
+    """
+    try:
+        img_cv = cv2.cvtColor(np.array(img_pil.convert("RGB")), cv2.COLOR_RGB2BGR)
+        gray   = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        cnts, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        best_rect = None
+        best_area = 0
+        for cnt in cnts:
+            x, y, bw, bh = cv2.boundingRect(cnt)
+            if bw < 50 or bh < 50:
+                continue
+            aspect = max(bw, bh) / max(1, min(bw, bh))
+            if aspect < 2.0 and bw * bh > best_area:
+                best_area = bw * bh
+                best_rect = (x, y, bw, bh)
+
+        if best_rect:
+            x, y, bw, bh = best_rect
+            side   = max(bw, bh)
+            margin = max(5, side // 15)
+            ih, iw = img_cv.shape[:2]
+            x0 = max(0, x - margin)
+            y0 = max(0, y - margin)
+            x1 = min(iw, x + bw + margin)
+            y1 = min(ih, y + bh + margin)
+            cropped = img_cv[y0:y1, x0:x1]
+            return Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+    except Exception as e:
+        print(f"[WARN] _contour_crop_qr failed: {e}")
+
+    return crop_qr_square(img_pil)
+
+
 # ================================================================
 #           LAYER 2 — LSB WATERMARK DETECTION
 #
@@ -396,7 +438,7 @@ def _extract_lsb_watermark(img: Image.Image) -> Optional[Dict[str, Any]]:
 def _align_qr_image(img_pil: Image.Image) -> Tuple[Image.Image, bool]:
     """
     Locate and perspective-warp the QR code in the image to a perfect square.
-    Tries: original → CLAHE-enhanced → Otsu-thresholded.
+    Tries: original → CLAHE-enhanced → Otsu-thresholded → sharpened.
     Returns (aligned_image, cv_detection_succeeded).
     """
     def _detect_corners(img_cv) -> Optional[np.ndarray]:
@@ -443,6 +485,13 @@ def _align_qr_image(img_pil: Image.Image) -> Tuple[Image.Image, bool]:
         if pts is not None:
             return _warp(img_cv, pts), True
 
+        # Strategy 4: unsharp-mask sharpening (low-contrast / slightly blurry prints)
+        kernel    = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]], dtype=np.float32)
+        sharpened = cv2.filter2D(img_cv, -1, kernel)
+        pts = _detect_corners(sharpened)
+        if pts is not None:
+            return _warp(img_cv, pts), True  # warp the original, not the sharpened
+
     except Exception as e:
         print(f"[WARN] QR alignment failed: {e}")
 
@@ -463,13 +512,18 @@ def _align_qr_image(img_pil: Image.Image) -> Tuple[Image.Image, bool]:
 def _classify_image(
     scanned_resized: Image.Image,
     expected_base: Image.Image,
+    expected_patterned: Image.Image,
 ) -> Dict[str, Any]:
     """
     Classify the aligned, resized scanned image as 'screenshot', 'real_photo',
     or 'borderline' using two independent metrics.
+
+    pixel_diff uses min(diff_vs_base, diff_vs_patterned) so that both a plain-QR
+    screenshot AND a screenshot of the watermarked generator PNG are caught.
     """
-    arr_scan = np.array(scanned_resized.convert("RGB"), dtype=np.float32)
-    arr_exp  = np.array(expected_base.convert("RGB"),   dtype=np.float32)
+    arr_scan      = np.array(scanned_resized.convert("RGB"),    dtype=np.float32)
+    arr_base      = np.array(expected_base.convert("RGB"),      dtype=np.float32)
+    arr_patterned = np.array(expected_patterned.convert("RGB"), dtype=np.float32)
 
     w       = expected_base.width
     modules = w // QR_BOX_SIZE
@@ -488,7 +542,7 @@ def _classify_image(
             cx = mx * QR_BOX_SIZE + QR_BOX_SIZE // 2
             cy = my * QR_BOX_SIZE + QR_BOX_SIZE // 2
             er, _, _ = expected_base.getpixel((min(cx, w - 1), min(cy, w - 1)))
-            if er > 128:        # only black modules
+            if er > 128:        # only black modules in the clean base image
                 continue
 
             # Four interior corners of this module (avoid center where dot may be)
@@ -500,7 +554,14 @@ def _classify_image(
                 black_lum.append((r + g + b) / 3.0)
 
     module_noise_std = float(np.std(black_lum)) if len(black_lum) >= 10 else 0.0
-    mean_pixel_diff  = float(np.abs(arr_scan - arr_exp).mean())
+
+    # B5: take the minimum diff against both expected variants.
+    # A screenshot of the plain QR matches base; a screenshot of the
+    # watermarked generator PNG matches patterned — both get caught.
+    mean_pixel_diff = float(min(
+        np.abs(arr_scan - arr_base).mean(),
+        np.abs(arr_scan - arr_patterned).mean(),
+    ))
 
     noise_low = module_noise_std < SCREENSHOT_NOISE_THRESHOLD
     diff_low  = mean_pixel_diff  < SCREENSHOT_DIFF_THRESHOLD
@@ -545,8 +606,8 @@ def _verify_micro_pattern(
     w, _    = expected_base.size
     modules = w // QR_BOX_SIZE
 
-    dot_r  = max(2, QR_BOX_SIZE // 4)
-    offset = max(1, QR_BOX_SIZE // 3)
+    dot_r  = max(3, QR_BOX_SIZE // 3)   # wider sample area — was QR_BOX_SIZE//4 (2px), too small to survive print chain
+    offset = max(1, QR_BOX_SIZE // 3)   # must match generator offset
 
     TOP_STRIP_THICKNESS   = 4
     RIGHT_STRIP_THICKNESS = 4
@@ -625,6 +686,123 @@ def _verify_micro_pattern(
 
 
 # ================================================================
+#           FILE-UPLOAD ORIGINAL-FILE VERIFIER
+#
+# The file-upload path has ONE acceptance rule:
+#   The uploaded file must be the exact original PNG produced by the
+#   generator — proven by (a) an intact LSB watermark and (b) near-zero
+#   pixel difference against the expected patterned QR image.
+#
+# Rejects:
+#   • JPEG screenshots  — JPEG codec destroys LSB bits
+#   • PNG screenshots   — screen-rendering pipeline changes pixels
+#   • Camera photos     — optics + sensor noise destroy LSB
+#   • Edited copies     — any pixel change raises diff above threshold
+# ================================================================
+def _verify_original_file(qr_img: Image.Image, url_in: str) -> dict:
+    """
+    Return {"is_original": True, ...} only when qr_img is the exact
+    original PNG generated by qr_generator.py.
+    """
+    payload_text = url_in.strip()
+
+    # Step 1: LSB watermark must be intact
+    wm_data = _extract_lsb_watermark(qr_img)
+    if not wm_data:
+        return {
+            "is_original": False,
+            "lsb_intact":  False,
+            "reason": (
+                "This does not appear to be the original generated QR file. "
+                "Screenshots and photos are not accepted — please upload the "
+                "original QR PNG file directly."
+            ),
+        }
+
+    # Step 2: pixel diff vs expected patterned QR must be near-zero
+    expected_patterned = apply_micro_pattern_top_and_right(make_qr_image(payload_text))
+    # crop_qr_square removes any OTP text strip the generator may have appended
+    qr_cropped = crop_qr_square(qr_img)
+    scan_arr = np.array(
+        qr_cropped.resize(expected_patterned.size, Image.LANCZOS).convert("RGB"),
+        dtype=np.float32,
+    )
+    exp_arr = np.array(expected_patterned.convert("RGB"), dtype=np.float32)
+    diff = float(np.abs(scan_arr - exp_arr).mean())
+
+    print(f"[DEBUG] _verify_original_file: lsb_intact=True, diff_vs_patterned={diff:.2f}")
+
+    if diff < SCREENSHOT_DIFF_THRESHOLD:
+        return {"is_original": True, "lsb_intact": True, "diff": round(diff, 2)}
+
+    return {
+        "is_original": False,
+        "lsb_intact":  True,
+        "reason": (
+            f"File content does not match the expected QR pattern "
+            f"(diff={diff:.1f}). Please upload the unmodified original QR PNG file."
+        ),
+    }
+
+
+# ================================================================
+#           LAYER 3c — CANONICAL GRID NORMALISER
+#
+# After perspective warp, OpenCV crops to the finder-pattern corners,
+# so the warped image has no quiet zone.  After a blind square-crop the
+# QR may be a small sub-region of a larger photo.  In both cases the
+# module positions assumed by the pattern checker (mx*BOX_SIZE pixels
+# from the top-left) are wrong.
+#
+# _normalize_to_qr_grid detects the actual dark-content bounding box,
+# expands it by an estimated quiet-zone margin, and re-sizes so that
+# module (QR_BORDER, QR_BORDER) lands at the expected pixel coordinate.
+# ================================================================
+def _normalize_to_qr_grid(aligned: Image.Image, canonical_size: int) -> Image.Image:
+    """
+    Re-crop the aligned image to include QR content + estimated quiet zone,
+    then resize to canonical_size × canonical_size.
+    Falls back to a plain resize when the heuristic cannot locate the QR.
+    """
+    arr = np.array(aligned.convert("L"), dtype=np.uint8)
+    h, w = arr.shape
+    min_count = max(1, int(min(h, w) * 0.05))
+
+    row_dark = (arr < 128).sum(axis=1) >= min_count
+    col_dark = (arr < 128).sum(axis=0) >= min_count
+
+    if not row_dark.any() or not col_dark.any():
+        return aligned.resize((canonical_size, canonical_size), Image.LANCZOS)
+
+    r_min = int(np.where(row_dark)[0][0])
+    r_max = int(np.where(row_dark)[0][-1])
+    c_min = int(np.where(col_dark)[0][0])
+    c_max = int(np.where(col_dark)[0][-1])
+
+    content_h = r_max - r_min
+    content_w = c_max - c_min
+
+    # Sanity: content must be roughly square and cover >10 % of the image
+    if content_h < h * 0.1 or content_w < w * 0.1:
+        return aligned.resize((canonical_size, canonical_size), Image.LANCZOS)
+    if max(content_h, content_w) / max(1, min(content_h, content_w)) > 2.5:
+        return aligned.resize((canonical_size, canonical_size), Image.LANCZOS)
+
+    total_modules = canonical_size // QR_BOX_SIZE
+    data_modules  = max(1, total_modules - 2 * QR_BORDER)
+    est_ppm       = (content_h + content_w) / (2.0 * data_modules)
+    quiet_px      = max(2, int(round(QR_BORDER * est_ppm)))
+
+    x0 = max(0, c_min - quiet_px)
+    y0 = max(0, r_min - quiet_px)
+    x1 = min(w, c_max + quiet_px)
+    y1 = min(h, r_max + quiet_px)
+
+    cropped = aligned.crop((x0, y0, x1, y1))
+    return cropped.resize((canonical_size, canonical_size), Image.LANCZOS)
+
+
+# ================================================================
 #           COMBINED IMAGE VERIFICATION PIPELINE
 # ================================================================
 def _run_image_verification(
@@ -649,13 +827,29 @@ def _run_image_verification(
 
     payload_text = url_in.strip()
 
-    # Layer 2: LSB watermark check on the raw upload (before any resampling)
+    # Layer 2: LSB watermark check on the raw upload (before any resampling).
+    # An intact watermark alone does NOT auto-fail: the original generator PNG
+    # also has an intact watermark.  We only call it a screenshot when the
+    # watermark is intact AND the pixel-diff vs. the expected QR is near-zero
+    # (i.e. the file is a pristine digital copy, not a camera photo of a print).
     wm_data = _extract_lsb_watermark(qr_img)
     result["lsb_intact"] = wm_data is not None
     if wm_data:
-        print(f"[DEBUG] LSB watermark intact: {wm_data}")
-        result["image_type"] = "screenshot"
-        return result
+        print(f"[DEBUG] LSB watermark intact: {wm_data} — checking pixel diff before classifying")
+        # Build expected to measure pixel-diff
+        _exp_tmp = make_qr_image(payload_text)
+        _exp_arr = np.array(_exp_tmp.convert("RGB"), dtype=np.float32)
+        _scan_arr = np.array(
+            qr_img.resize(_exp_tmp.size, Image.LANCZOS).convert("RGB"), dtype=np.float32
+        )
+        _diff = float(np.abs(_scan_arr - _exp_arr).mean())
+        print(f"[DEBUG] LSB intact pixel-diff={_diff:.2f}")
+        if _diff < SCREENSHOT_DIFF_THRESHOLD:  # near-zero diff → digital copy
+            result["image_type"] = "screenshot"
+            return result
+        # Large diff → physical print that still carries readable watermark bits
+        # (uncommon but possible with low-noise printers); continue to pattern check.
+        print("[DEBUG] LSB intact but large pixel-diff → treating as physical print")
 
     # Build expected QR images (shared by classifier and pattern checker)
     expected_base      = make_qr_image(payload_text)
@@ -665,12 +859,13 @@ def _run_image_verification(
     aligned, cv_ok = _align_qr_image(qr_img)
     result["cv_aligned"] = cv_ok
     if not cv_ok:
-        aligned = crop_qr_square(qr_img)
+        aligned = _contour_crop_qr(qr_img)  # B4: smarter than crop_qr_square for sub-region photos
 
-    scanned_resized = aligned.resize(expected_patterned.size, Image.LANCZOS)
+    # B3: re-crop to canonical grid so module pixel positions are correct
+    scanned_resized = _normalize_to_qr_grid(aligned, expected_patterned.size[0])
 
     # Layer 3b: Classify image type
-    classification = _classify_image(scanned_resized, expected_base)
+    classification = _classify_image(scanned_resized, expected_base, expected_patterned)
     result.update(classification)
 
     if result["image_type"] == "screenshot":
@@ -686,16 +881,27 @@ def _run_image_verification(
 # ================================================================
 #                    COUNTRY DETECTION (GPS)
 # ================================================================
+GEO_USER_AGENT = os.getenv(
+    "GEO_USER_AGENT",
+    "ReputQRVerification/1.0 (admin@reput.co.in)",
+)
+
+
 def detect_country(lat, lng):
     if lat is None or lng is None:
+        print("[GEO] lat/lng not provided — country Unknown")
         return "Unknown"
     try:
-        geolocator = Nominatim(user_agent="qr_verifier")
-        location = geolocator.reverse((lat, lng), language="en")
+        geolocator = Nominatim(user_agent=GEO_USER_AGENT)
+        location = geolocator.reverse((lat, lng), language="en", timeout=5)
         if not location:
+            print(f"[GEO] reverse geocode returned nothing for ({lat}, {lng})")
             return "Unknown"
-        return location.raw.get("address", {}).get("country", "Unknown")
-    except Exception:
+        country = location.raw.get("address", {}).get("country", "Unknown")
+        print(f"[GEO] ({lat}, {lng}) → {country}")
+        return country
+    except Exception as e:
+        print(f"[GEO] detect_country error: {e}")
         return "Unknown"
 
 
@@ -1173,6 +1379,45 @@ def health():
     return jsonify({"ok": True})
 
 
+@app.route("/api/admin/clear_scan_history", methods=["POST"])
+def clear_scan_history():
+    """
+    Delete scan log rows for a specific token (or all rows when token='*').
+    Body JSON: { "token": "<token>" }  — pass token='*' to wipe all rows.
+    Protected by a simple admin key (env ADMIN_KEY; defaults to 'reput-admin').
+    """
+    ADMIN_KEY = os.getenv("ADMIN_KEY", "reput-admin")
+    provided_key = request.headers.get("X-Admin-Key", "")
+    if provided_key != ADMIN_KEY:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    data = request.get_json(silent=True) or {}
+    token = data.get("token", "").strip()
+    if not token:
+        return jsonify({"error": "token is required"}), 400
+
+    try:
+        conn = db_connect()
+        try:
+            with conn.cursor() as cur:
+                if token == "*":
+                    cur.execute(f"DELETE FROM {SCAN_LOG_TABLE}")
+                else:
+                    cur.execute(
+                        f"DELETE FROM {SCAN_LOG_TABLE} WHERE token = %s",
+                        (token,),
+                    )
+                deleted = cur.rowcount
+            conn.commit()
+        finally:
+            conn.close()
+        print(f"[ADMIN] clear_scan_history token={token!r} deleted={deleted}")
+        return jsonify({"deleted": deleted})
+    except Exception as e:
+        print(f"[ADMIN] clear_scan_history error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/")
 def home():
     return render_template("index.html")
@@ -1181,6 +1426,71 @@ def home():
 @app.route("/results")
 def results():
     return render_template("results.html")
+
+
+# ================================================================
+#   QR DECODE HELPER  —  shared by /api/decode_qr and _opencv_decode_url
+#
+#   Five preprocessing strategies are tried in order so that real camera
+#   photos of printed labels are decoded as reliably as digital images:
+#     1. Raw frame
+#     2. CLAHE contrast enhancement   (poor / uneven lighting)
+#     3. Otsu global threshold         (low contrast)
+#     4. Unsharp-mask sharpening       (slightly blurry prints)
+#     5. 2× bicubic upscale            (small / distant QR codes)
+# ================================================================
+def _try_decode_url_from_cv(img_cv) -> Optional[str]:
+    """
+    Attempt to decode a QR URL from an OpenCV BGR image.
+    Returns the first non-empty decoded string, or None.
+    """
+    detector = cv2.QRCodeDetector()
+
+    def _decode(frame) -> Optional[str]:
+        try:
+            retval, decoded_info, _, _ = detector.detectAndDecodeMulti(frame)
+            if retval and decoded_info:
+                for text in decoded_info:
+                    if text and text.strip():
+                        return text.strip()
+        except Exception:
+            pass
+        return None
+
+    # Strategy 1: raw
+    result = _decode(img_cv)
+    if result:
+        return result
+
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+
+    # Strategy 2: CLAHE contrast enhancement
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    result = _decode(cv2.cvtColor(clahe.apply(gray), cv2.COLOR_GRAY2BGR))
+    if result:
+        return result
+
+    # Strategy 3: Otsu global threshold
+    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    result = _decode(cv2.cvtColor(otsu, cv2.COLOR_GRAY2BGR))
+    if result:
+        return result
+
+    # Strategy 4: unsharp-mask sharpening (enhances low-contrast finder patterns)
+    kernel    = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]], dtype=np.float32)
+    sharpened = cv2.filter2D(img_cv, -1, kernel)
+    result = _decode(sharpened)
+    if result:
+        return result
+
+    # Strategy 5: 2× upscale (helps small or distant QR codes)
+    h, w = img_cv.shape[:2]
+    up2  = cv2.resize(img_cv, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+    result = _decode(up2)
+    if result:
+        return result
+
+    return None
 
 
 # ================================================================
@@ -1218,44 +1528,9 @@ def decode_qr():
         if img_cv is None:
             return jsonify({"decoded": False, "url": None, "error": "Could not decode image"}), 400
 
-        detector  = cv2.QRCodeDetector()
-        url_found = None
-
-        # Strategy 1: raw frame
-        retval, decoded_info, _, _ = detector.detectAndDecodeMulti(img_cv)
-        if retval and decoded_info:
-            for text in decoded_info:
-                if text and text.strip():
-                    url_found = text.strip()
-                    break
-
-        # Strategy 2: CLAHE contrast enhancement
-        if url_found is None:
-            gray     = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-            clahe    = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            enhanced = cv2.cvtColor(clahe.apply(gray), cv2.COLOR_GRAY2BGR)
-            retval, decoded_info, _, _ = detector.detectAndDecodeMulti(enhanced)
-            if retval and decoded_info:
-                for text in decoded_info:
-                    if text and text.strip():
-                        url_found = text.strip()
-                        break
-
-        # Strategy 3: Otsu binary threshold
-        if url_found is None:
-            gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-            _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            retval, decoded_info, _, _ = detector.detectAndDecodeMulti(
-                cv2.cvtColor(otsu, cv2.COLOR_GRAY2BGR)
-            )
-            if retval and decoded_info:
-                for text in decoded_info:
-                    if text and text.strip():
-                        url_found = text.strip()
-                        break
-
+        url_found = _try_decode_url_from_cv(img_cv)
         if url_found:
-            print(f"[DEBUG] /api/decode_qr — OpenCV decoded: {url_found[:80]}...")
+            print(f"[DEBUG] /api/decode_qr — decoded: {url_found[:80]}...")
             return jsonify({"decoded": True, "url": url_found})
 
         return jsonify({"decoded": False, "url": None})
@@ -1277,12 +1552,7 @@ def _opencv_decode_url(qr_file) -> Optional[str]:
         img_cv = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
         if img_cv is None:
             return None
-        detector = cv2.QRCodeDetector()
-        retval, decoded_info, _, _ = detector.detectAndDecodeMulti(img_cv)
-        if retval and decoded_info:
-            for text in decoded_info:
-                if text and text.strip():
-                    return text.strip()
+        return _try_decode_url_from_cv(img_cv)
     except Exception as e:
         print(f"[WARN] _opencv_decode_url failed: {e}")
     return None
@@ -1297,8 +1567,11 @@ def verify_qr():
       - qr_image (recommended for micro-pattern)
       - lat, lng (optional, for scan logging only)
     """
-    url_in   = request.form.get("url") or ""
-    token_in = request.form.get("token") or ""
+    url_in      = request.form.get("url") or ""
+    token_in    = request.form.get("token") or ""
+    # 'file'   → user uploaded the original generated PNG via the file-input
+    # 'camera' → image came from the live video-stream scanner (default)
+    scan_source = request.form.get("scan_source", "camera")
 
     # OpenCV fallback: decode the URL from the image if not supplied by client
     if not url_in:
@@ -1307,7 +1580,7 @@ def verify_qr():
             url_in = _opencv_decode_url(qr_file_for_decode) or ""
             if url_in:
                 print(f"[DEBUG] URL extracted via OpenCV fallback: {url_in[:80]}")
-    token    = extract_token(token_in) or extract_token(url_in)
+    token = extract_token(token_in) or extract_token(url_in)
 
     if not token:
         return jsonify({
@@ -1332,49 +1605,74 @@ def verify_qr():
                   "record in our system. It may be counterfeit.")
 
     else:
-        # ── Layers 2-4: physical image analysis ───────────────
         qr_file = request.files.get("qr_image")
 
         if qr_file and url_in and "://" in url_in:
             try:
-                qr_img      = Image.open(qr_file).convert("RGB")
-                image_checks = _run_image_verification(qr_img, url_in)
+                qr_img = Image.open(qr_file).convert("RGB")
+
+                # ── FILE-UPLOAD PATH ──────────────────────────────────────
+                # Only the exact original generated PNG is accepted.
+                # Screenshots and camera photos are rejected here.
+                if scan_source == "file":
+                    orig = _verify_original_file(qr_img, url_in)
+                    image_checks = {
+                        "image_type":        "original_file" if orig["is_original"] else "not_original",
+                        "lsb_intact":        orig.get("lsb_intact", False),
+                        "cv_aligned":        None,
+                        "module_noise_std":  None,
+                        "mean_pixel_diff":   orig.get("diff"),
+                        "pattern_score":     None,
+                        "micro_ok":          None,
+                    }
+                    if orig["is_original"]:
+                        final_status = "AUTHENTIC"
+                        verified     = True
+                        reason       = ("Original generated QR file verified. "
+                                        "Cryptographic signature is valid.")
+                    else:
+                        reason = orig["reason"]
+
+                # ── CAMERA-SCAN PATH ──────────────────────────────────────
+                # Physical printed labels pass through micro-pattern analysis.
+                # Digital copies (screenshots, phone-screen photos) are rejected.
+                else:
+                    image_checks = _run_image_verification(qr_img, url_in)
+                    img_type     = image_checks.get("image_type", "unknown")
+
+                    if img_type == "screenshot":
+                        reason = ("A digital copy of the QR code was detected. "
+                                  "Please scan the physical printed label on the "
+                                  "product to verify authenticity.")
+
+                    elif not image_checks.get("micro_ok", False):
+                        score = image_checks.get("pattern_score", 0.0)
+                        if img_type == "borderline" and score >= 30.0:
+                            reason = ("Image quality was insufficient for full micro-pattern "
+                                      "analysis. Please scan the label in better lighting "
+                                      "and try again.")
+                        else:
+                            reason = ("The cryptographic signature is valid, but the physical "
+                                      "security micro-pattern on the QR code was not detected. "
+                                      "The printed label may be a counterfeit reproduction.")
+                    else:
+                        final_status = "AUTHENTIC"
+                        verified     = True
+                        reason       = ("This product has been verified as authentic. "
+                                        "Cryptographic signature and physical security "
+                                        "pattern both passed successfully.")
+
             except Exception as e:
                 print(f"[WARN] Image verification error: {e}")
                 image_checks = {"image_type": "error", "micro_ok": False}
-
-            img_type = image_checks.get("image_type", "unknown")
-
-            if img_type == "screenshot":
-                reason = ("A digital copy of the QR code was detected. "
-                          "Please photograph the physical printed label on the "
-                          "product to verify authenticity.")
-
-            elif not image_checks.get("micro_ok", False):
-                # Borderline images that fail pattern → report reason based on score
-                score = image_checks.get("pattern_score", 0.0)
-                if img_type == "borderline" and score >= 30.0:
-                    reason = ("Image quality was insufficient for full micro-pattern "
-                              "analysis. Please photograph the label in better lighting "
-                              "and try again.")
-                else:
-                    reason = ("The cryptographic signature is valid, but the physical "
-                              "security micro-pattern on the QR code was not detected. "
-                              "The printed label may be a counterfeit reproduction.")
-
-            else:
-                final_status = "AUTHENTIC"
-                verified     = True
-                reason       = ("This product has been verified as authentic. "
-                                "Cryptographic signature and physical security "
-                                "pattern both passed successfully.")
+                reason       = "Image verification failed. Please try again."
 
         else:
             # Token-only verification (no image uploaded)
             final_status = "AUTHENTIC"
             verified     = True
-            reason       = ("Cryptographic signature verified. Upload an image of "
-                            "the physical label for complete anti-counterfeit verification.")
+            reason       = ("Cryptographic signature verified. Upload the original QR file "
+                            "or scan the physical label for complete verification.")
 
     # ── Scan metadata (logging only, not used in decision) ────
     lat = request.form.get("lat")
@@ -1483,7 +1781,8 @@ def verify_qr():
     })
 
 
-@app.route("/api/check_ownership", methods=["POST"])
+# OWNERSHIP_DISABLED — uncomment @app.route to re-enable
+# @app.route("/api/check_ownership", methods=["POST"])
 def check_ownership():
     """
     Check if ownership has been claimed for a token and verify device fingerprint.
@@ -1533,7 +1832,8 @@ def check_ownership():
     })
 
 
-@app.route("/api/claim_ownership", methods=["POST"])
+# OWNERSHIP_DISABLED — uncomment @app.route to re-enable
+# @app.route("/api/claim_ownership", methods=["POST"])
 def claim_ownership_endpoint():
     """
     Claim ownership of a product by verifying OTP.
