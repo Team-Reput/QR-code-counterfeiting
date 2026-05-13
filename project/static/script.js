@@ -223,31 +223,82 @@ function goToResults(data, scannedUrl = '') {
 // Camera
 // -------------------------------------------------------------
 async function startCamera() {
-  cameraPrompt.classList.add('hidden');
-  scanOverlay.classList.remove('hidden');
+  const promptBtn = cameraPrompt.querySelector('.btn-allow');
+  const promptMsg = cameraPrompt.querySelector('p');
+
+  // ── Secure-context guard ─────────────────────────────────────
+  // navigator.mediaDevices is undefined on plain HTTP over a LAN/network IP
+  // (e.g. http://192.168.x.x). Camera access requires HTTPS or localhost.
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    const isHttp  = window.location.protocol === 'http:';
+    const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+
+    let msg = 'Camera requires a secure connection (HTTPS).';
+    if (isHttp && !isLocal) {
+      msg = `Camera blocked: open this page via localhost instead.\n` +
+            `Try: http://localhost:${window.location.port || 5000}/ or http://127.0.0.1:${window.location.port || 5000}/`;
+    }
+
+    if (promptMsg) promptMsg.textContent = msg;
+    if (promptBtn) { promptBtn.textContent = 'Open Localhost'; promptBtn.onclick = () => {
+      window.location.href = `http://localhost:${window.location.port || 5000}/`;
+    }; }
+    cameraPrompt.classList.remove('hidden');
+    console.error('[camera] navigator.mediaDevices unavailable — not a secure context:', window.location.href);
+    return;
+  }
+
+  // Show a loading state while requesting camera
+  if (promptBtn) promptBtn.textContent = 'Starting…';
+  if (promptMsg) promptMsg.textContent  = 'Requesting camera access…';
+  cameraPrompt.classList.remove('hidden');
+  scanOverlay.classList.add('hidden');
   previewImage.classList.add('hidden');
 
-  try {
-    const constraints = {
-      video: {
-        facingMode: 'environment',
-        width: { ideal: 1280 },
-        height: { ideal: 1280 }
-      }
-    };
+  // Three-tier fallback so the camera works on phones (rear),
+  // laptops (front/any) and anything in between.
+  const strategies = [
+    { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 1280 } } },
+    { video: { width: { ideal: 1280 }, height: { ideal: 1280 } } },
+    { video: true },
+  ];
 
-    videoStream = await navigator.mediaDevices.getUserMedia(constraints);
-    video.srcObject = videoStream;
+  let lastError = null;
+  for (const constraints of strategies) {
+    try {
+      videoStream = await navigator.mediaDevices.getUserMedia(constraints);
+      break;
+    } catch (err) {
+      lastError = err;
+      console.warn('[camera] Strategy failed, trying next:', err.name, err.message);
+    }
+  }
 
-    video.addEventListener('loadedmetadata', () => {
-      startScanning();
-    }, { once: true });
+  if (!videoStream) {
+    console.error('[camera] All strategies failed:', lastError);
+    const reason = lastError
+      ? (lastError.name === 'NotAllowedError'
+          ? 'Camera permission was denied. Please allow camera access in your browser settings and try again.'
+          : lastError.name === 'NotFoundError'
+            ? 'No camera found on this device. Please use the Upload QR Image button instead.'
+            : `Camera error: ${lastError.message}`)
+      : 'Unknown camera error.';
 
-  } catch (error) {
-    console.error('Camera error:', error);
+    if (promptMsg) promptMsg.textContent = reason;
+    if (promptBtn) promptBtn.textContent = 'Retry';
     cameraPrompt.classList.remove('hidden');
     scanOverlay.classList.add('hidden');
+    return;
   }
+
+  // Camera obtained — hide prompt and start streaming
+  cameraPrompt.classList.add('hidden');
+  scanOverlay.classList.remove('hidden');
+
+  video.srcObject = videoStream;
+  video.addEventListener('loadedmetadata', () => {
+    startScanning();
+  }, { once: true });
 }
 
 function stopCamera() {
@@ -261,55 +312,111 @@ function stopCamera() {
   }
 }
 
+// ---------------------------------------------------------------
+// startScanning  — OpenCV frame-streaming approach
+//
+// Instead of running jsQR in the browser, we send compressed JPEG
+// frames to the Python backend's /api/decode_qr endpoint.  OpenCV
+// on the server decodes the QR text using three strategies (raw →
+// CLAHE → Otsu). Once a URL is returned we immediately capture a
+// full-resolution, uncompressed PNG and send it to /verify so the
+// backend can run the complete counterfeit-detection pipeline
+// (micro-pattern, LSB watermark, image classifier, etc.) without
+// any browser-side compression artefacts.
+// ---------------------------------------------------------------
+let _scanBusy = false;   // prevent overlapping requests
+
 function startScanning() {
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
+  const canvas     = document.createElement('canvas');
+  const context    = canvas.getContext('2d');
+  const hiResCanvas = document.createElement('canvas');
+  const hiResCtx   = hiResCanvas.getContext('2d');
 
-  scanningInterval = setInterval(() => {
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  scanningInterval = setInterval(async () => {
+    // Skip this tick if a request is still in flight
+    if (_scanBusy || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+    _scanBusy = true;
 
-      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQR(imageData.data, imageData.width, imageData.height);
+    try {
+      // ── Step 1: capture a small JPEG frame (low bandwidth) ──────
+      const W = video.videoWidth;
+      const H = video.videoHeight;
+      canvas.width  = W;
+      canvas.height = H;
+      context.drawImage(video, 0, 0, W, H);
 
-      if (code) {
-        stopCamera();
+      const jpegBlob = await new Promise(resolve =>
+        canvas.toBlob(resolve, 'image/jpeg', 0.55)   // ~55 % quality to save data
+      );
 
-        const decodedUrl = code.data;
-        const token = extractTokenFromUrlText(decodedUrl);
+      // ── Step 2: send frame to backend OpenCV decoder ─────────────
+      const fd = new FormData();
+      fd.append('frame', jpegBlob, 'frame.jpg');
 
-        if (!token) {
-          goToResults({
-            status: "FAKE",
-            verified: false,
-            reason: "QR code was detected but does not contain a valid verification token. This is not an authenticated product QR code.",
-            product: {}
-          });
-          return;
-        }
-
-        canvas.toBlob(async (blob) => {
-          try {
-            const resp = await verifyWithBackend(decodedUrl, blob);
-            goToResults(resp, decodedUrl);
-          } catch (err) {
-            goToResults({
-              status: "FAKE",
-              verified: false,
-              reason: err.message || "Server verification failed. Please try again.",
-              product: {}
-            });
-          }
-        }, "image/png");
+      let decodeResp;
+      try {
+        decodeResp = await fetch(`${BACKEND_BASE}/api/decode_qr`, {
+          method: 'POST',
+          body: fd
+        });
+      } catch (networkErr) {
+        console.warn('[scan] Network error on /api/decode_qr:', networkErr);
+        return;   // try next tick
       }
+
+      const decodeData = await decodeResp.json().catch(() => ({}));
+
+      if (!decodeData.decoded || !decodeData.url) {
+        return;   // QR not found yet — keep scanning
+      }
+
+      // ── QR code found — stop live scanning ───────────────────────
+      stopCamera();
+      const decodedUrl = decodeData.url;
+      const token      = extractTokenFromUrlText(decodedUrl);
+
+      if (!token) {
+        goToResults({
+          status:   'FAKE',
+          verified: false,
+          reason:   'QR code was detected but does not contain a valid verification token. This is not an authenticated product QR code.',
+          product:  {}
+        });
+        return;
+      }
+
+      // ── Step 3: capture a HIGH-QUALITY PNG for counterfeit analysis
+      //    (uncompressed so micro-pattern dots and LSB bits survive)  ──
+      hiResCanvas.width  = W;
+      hiResCanvas.height = H;
+      hiResCtx.drawImage(video, 0, 0, W, H);   // note: video is stopped but last frame is still accessible
+
+      const hiResBlob = await new Promise(resolve =>
+        hiResCanvas.toBlob(resolve, 'image/png')   // lossless
+      );
+
+      // ── Step 4: send to /verify for full counterfeit analysis ─────
+      try {
+        const resp = await verifyWithBackend(decodedUrl, hiResBlob);
+        goToResults(resp, decodedUrl);
+      } catch (err) {
+        goToResults({
+          status:   'FAKE',
+          verified: false,
+          reason:   err.message || 'Server verification failed. Please try again.',
+          product:  {}
+        });
+      }
+
+    } finally {
+      _scanBusy = false;
     }
-  }, 300);
+  }, 350);   // poll every 350 ms — fast enough to feel responsive
 }
 
 // -------------------------------------------------------------
 // File Upload Handling
+// (jsQR removed — OpenCV on the backend decodes the QR text)
 // -------------------------------------------------------------
 fileInput.addEventListener('change', (e) => {
   const file = e.target.files[0];
@@ -325,61 +432,62 @@ function handleFile(file) {
     previewImage.classList.remove('hidden');
     scanOverlay.classList.add('hidden');
 
-    decodeQRFromImage(e.target.result, file);
+    decodeQRFromImage(file);
   };
   reader.readAsDataURL(file);
 }
 
-function decodeQRFromImage(imageSrc, originalFile) {
-  const img = new Image();
-  img.onload = async () => {
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
+// decodeQRFromImage — sends the uploaded file to /api/decode_qr
+// so OpenCV extracts the URL, then passes both to /verify.
+// (Previously this function used jsQR; jsQR is no longer needed.)
+async function decodeQRFromImage(originalFile) {
+  try {
+    // Step 1: ask OpenCV backend to decode the QR text
+    const fd = new FormData();
+    fd.append('frame', originalFile, originalFile.name || 'upload.png');
 
-    canvas.width = img.width;
-    canvas.height = img.height;
-    context.drawImage(img, 0, 0);
+    const decodeResp = await fetch(`${BACKEND_BASE}/api/decode_qr`, {
+      method: 'POST',
+      body:   fd
+    });
+    const decodeData = await decodeResp.json().catch(() => ({}));
 
-    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(imageData.data, imageData.width, imageData.height);
-
-    if (!code) {
+    if (!decodeData.decoded || !decodeData.url) {
       goToResults({
-        status: "FAKE",
+        status:   'FAKE',
         verified: false,
-        reason: "No QR code could be detected in the uploaded image. Please upload a clear image of the product's QR code.",
-        product: {}
+        reason:   'No QR code could be detected in the uploaded image. Please upload a clear image of the product\'s QR code.',
+        product:  {}
       });
       return;
     }
 
-    const decodedUrl = code.data;
-    const token = extractTokenFromUrlText(decodedUrl);
+    const decodedUrl = decodeData.url;
+    const token      = extractTokenFromUrlText(decodedUrl);
 
     if (!token) {
       goToResults({
-        status: "FAKE",
+        status:   'FAKE',
         verified: false,
-        reason: "QR code was detected but does not contain a valid verification token. This is not an authenticated product QR code.",
-        product: {}
+        reason:   'QR code was detected but does not contain a valid verification token. This is not an authenticated product QR code.',
+        product:  {}
       });
       return;
     }
 
-    try {
-      const resp = await verifyWithBackend(decodedUrl, originalFile);
-      goToResults(resp, decodedUrl);
-    } catch (err) {
-      goToResults({
-        status: "FAKE",
-        verified: false,
-        reason: err.message || "Server verification failed. Please try again.",
-        product: {}
-      });
-    }
-  };
+    // Step 2: send original file (lossless PNG or high-res JPEG from device)
+    // to /verify for the full security pipeline
+    const resp = await verifyWithBackend(decodedUrl, originalFile);
+    goToResults(resp, decodedUrl);
 
-  img.src = imageSrc;
+  } catch (err) {
+    goToResults({
+      status:   'FAKE',
+      verified: false,
+      reason:   err.message || 'Server verification failed. Please try again.',
+      product:  {}
+    });
+  }
 }
 
 // ===== Initialize =====

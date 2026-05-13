@@ -58,7 +58,7 @@ OTP_CSV_FILE = os.getenv("OTP_CSV_FILE", os.path.join(os.path.dirname(__file__),
 # Lock for thread-safe CSV operations
 csv_lock = threading.Lock()
 
-# ----------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Image analysis thresholds — tunable via environment variables.
 # SCREENSHOT_NOISE_THRESHOLD : std-dev of black-module pixel luminance.
 #   Real prints: ~15–40.  Digital screenshots: <5.
@@ -66,16 +66,16 @@ csv_lock = threading.Lock()
 #   Real prints: ~30–80.  Digital screenshots: <8.
 # MICRO_PATTERN_MIN_DIFF     : min brightness gain (dot area vs background).
 # MICRO_PATTERN_PASS_RATIO   : fraction of dots that must be visible.
-# ----------------------------------------------------------------
+# ---------------------------------------------------------------------------
 SCREENSHOT_NOISE_THRESHOLD = float(os.getenv("SCREENSHOT_NOISE_THRESHOLD", "10.0"))
 SCREENSHOT_DIFF_THRESHOLD  = float(os.getenv("SCREENSHOT_DIFF_THRESHOLD",  "15.0"))
 MICRO_PATTERN_MIN_DIFF     = float(os.getenv("MICRO_PATTERN_MIN_DIFF",     "20.0"))
 MICRO_PATTERN_PASS_RATIO   = float(os.getenv("MICRO_PATTERN_PASS_RATIO",   "0.45"))
 
 
-# ================================================================
+# =================================================================
 #                        JSON ENCODER
-# ================================================================
+# =================================================================
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, (datetime, date)):
@@ -1183,16 +1183,130 @@ def results():
     return render_template("results.html")
 
 
+# ================================================================
+#   /api/decode_qr  —  OpenCV-powered QR decoding endpoint
+#
+#   The web frontend streams compressed JPEG frames here instead of
+#   running jsQR locally.  OpenCV decodes the payload and returns the
+#   full URL string so the frontend can then call /verify with both
+#   the URL and a high-resolution image for micro-pattern analysis.
+#
+#   Input  (multipart/form-data):
+#     frame  — JPEG or PNG image blob captured from the <video> element
+#
+#   Output (JSON):
+#     { "decoded": true,  "url": "https://..." }   on success
+#     { "decoded": false, "url": null }             when no QR found
+#     { "decoded": false, "error": "..." }          on exception
+# ================================================================
+@app.route("/api/decode_qr", methods=["POST"])
+def decode_qr():
+    """
+    Lightweight, fast endpoint: accepts a compressed video frame from
+    the browser and uses OpenCV to locate and decode the QR code.
+    No cryptographic or micro-pattern work is done here — this is
+    purely a QR text extraction step.
+    """
+    frame_file = request.files.get("frame")
+    if not frame_file:
+        return jsonify({"decoded": False, "url": None, "error": "No frame provided"}), 400
+
+    try:
+        file_bytes = np.frombuffer(frame_file.read(), dtype=np.uint8)
+        img_cv     = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+        if img_cv is None:
+            return jsonify({"decoded": False, "url": None, "error": "Could not decode image"}), 400
+
+        detector  = cv2.QRCodeDetector()
+        url_found = None
+
+        # Strategy 1: raw frame
+        retval, decoded_info, _, _ = detector.detectAndDecodeMulti(img_cv)
+        if retval and decoded_info:
+            for text in decoded_info:
+                if text and text.strip():
+                    url_found = text.strip()
+                    break
+
+        # Strategy 2: CLAHE contrast enhancement
+        if url_found is None:
+            gray     = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+            clahe    = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = cv2.cvtColor(clahe.apply(gray), cv2.COLOR_GRAY2BGR)
+            retval, decoded_info, _, _ = detector.detectAndDecodeMulti(enhanced)
+            if retval and decoded_info:
+                for text in decoded_info:
+                    if text and text.strip():
+                        url_found = text.strip()
+                        break
+
+        # Strategy 3: Otsu binary threshold
+        if url_found is None:
+            gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+            _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            retval, decoded_info, _, _ = detector.detectAndDecodeMulti(
+                cv2.cvtColor(otsu, cv2.COLOR_GRAY2BGR)
+            )
+            if retval and decoded_info:
+                for text in decoded_info:
+                    if text and text.strip():
+                        url_found = text.strip()
+                        break
+
+        if url_found:
+            print(f"[DEBUG] /api/decode_qr — OpenCV decoded: {url_found[:80]}...")
+            return jsonify({"decoded": True, "url": url_found})
+
+        return jsonify({"decoded": False, "url": None})
+
+    except Exception as e:
+        print(f"[WARN] /api/decode_qr error: {e}")
+        return jsonify({"decoded": False, "url": None, "error": str(e)}), 500
+
+
+def _opencv_decode_url(qr_file) -> Optional[str]:
+    """
+    Helper used by /verify: if the client did not supply a 'url' field,
+    attempt to extract it from the uploaded qr_image using OpenCV.
+    Returns the decoded URL string or None.
+    """
+    try:
+        file_bytes = np.frombuffer(qr_file.read(), dtype=np.uint8)
+        qr_file.seek(0)  # rewind so PIL can read it again later
+        img_cv = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        if img_cv is None:
+            return None
+        detector = cv2.QRCodeDetector()
+        retval, decoded_info, _, _ = detector.detectAndDecodeMulti(img_cv)
+        if retval and decoded_info:
+            for text in decoded_info:
+                if text and text.strip():
+                    return text.strip()
+    except Exception as e:
+        print(f"[WARN] _opencv_decode_url failed: {e}")
+    return None
+
+
 @app.route("/verify", methods=["POST"])
 def verify_qr():
     """
     Expected inputs (form-data):
-      - url (always in your case; contains token=...)
+      - url   — full scanned URL containing token=... (may be omitted;
+                backend will attempt to extract it via OpenCV in that case)
       - qr_image (recommended for micro-pattern)
       - lat, lng (optional, for scan logging only)
     """
     url_in   = request.form.get("url") or ""
     token_in = request.form.get("token") or ""
+
+    # OpenCV fallback: decode the URL from the image if not supplied by client
+    if not url_in:
+        qr_file_for_decode = request.files.get("qr_image")
+        if qr_file_for_decode:
+            url_in = _opencv_decode_url(qr_file_for_decode) or ""
+            if url_in:
+                print(f"[DEBUG] URL extracted via OpenCV fallback: {url_in[:80]}")
     token    = extract_token(token_in) or extract_token(url_in)
 
     if not token:

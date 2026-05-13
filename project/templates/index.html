@@ -86,8 +86,10 @@
         </footer>
     </div>
 
-    <!-- Include QR Code Scanner Library -->
+    <!-- jsQR removed — QR decoding is now handled by OpenCV on the Python backend.
+         The /api/decode_qr endpoint accepts video frames and returns the decoded URL.
     <script src="https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"></script>
+    -->
     <script src="/static/script.js"></script>
 </body>
 
